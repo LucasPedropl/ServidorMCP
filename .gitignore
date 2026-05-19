@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Env files
+.env
+.env.local
+.env.*
+**/.env
+**/.env.local
+**/.env.*
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Logs
+*.log
+mcp_debug.log
+stderr.txt
+stdout.txt
+
+# Temporary / Trash files
+trash/
+

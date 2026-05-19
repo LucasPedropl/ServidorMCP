@@ -1,0 +1,69 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Terminal: Frontend (Next.js)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/apps/web",
+      "presentation": {
+        "group": "mcp",
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "name": "Terminal: Backend (MCP Core)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/apps/api",
+      "presentation": {
+        "group": "mcp",
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "name": "🌐 Gatilho do Navegador",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "node -e \"setTimeout(() => require('child_process').exec('start http://localhost:3000'), 3000)\"",
+      "cwd": "${workspaceFolder}",
+      "presentation": {
+        "reveal": "never",
+        "panel": "shared"
+      }
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "cppdbg",
+      "request": "launch",
+      "args": [],
+      "stopAtEntry": false,
+      "externalConsole": true,
+      "cwd": "c:/Users/Pedro/Downloads/ServidorMCP",
+      "program": "c:/Users/Pedro/Downloads/ServidorMCP/build/Debug/outDebug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "🚀 Iniciar Monorepo (Web + API + Opera GX)",
+      "configurations": [
+        "Terminal: Frontend (Next.js)",
+        "Terminal: Backend (MCP Core)",
+        "🌐 Gatilho do Navegador"
+      ]
+    }
+  ]
+}
