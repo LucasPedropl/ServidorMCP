@@ -18,7 +18,8 @@ import {
   getTestCases,
   getTestCaseByName,
   saveTestRun,
-  getTestRuns
+  getTestRuns,
+  updateTestRun
 } from '../repositories/mcpRepository.js';
 import type { ServerRecord, ToolRecord, CategoryRecord, TestCaseRecord, TestRunRecord } from '../repositories/mcpRepository.js';
 import { executeGenericMcpProxy } from './mcpProxyService.js';
@@ -780,6 +781,38 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
     }
   );
 
+  // Ferramenta 10.5: Adicionar Nota ao Playbook (Playbook Append)
+  mcp.tool(
+    'adicionar_nota_playbook',
+    `Permite adicionar uma nova nota, dica ou lição aprendida incremental no final do Playbook da API do ${serverRecord.name}, sem risco de apagar ou sobrescrever o conteúdo histórico existente.`,
+    {
+      title: z.string().describe('Título curto da nova seção/dica a ser adicionada (ex: "Tratamento de ID na Assinatura")'),
+      content: z.string().describe('Conteúdo textual em formato Markdown contendo a lição aprendida, exemplo de payload ou dica de integração.')
+    },
+    async (args) => {
+      console.error(`[MCP Tool Executada] IA chamou "adicionar_nota_playbook"`);
+      try {
+        const currentPlaybook = await getLatestPlaybook(serverRecord!.id) || '';
+        const timestamp = new Date().toLocaleDateString('pt-BR');
+        
+        let newContent = currentPlaybook.trim();
+        if (newContent) {
+          newContent += '\n\n';
+        }
+        newContent += `## ${args.title} (${timestamp})\n${args.content}\n`;
+        
+        await savePlaybookVersion(serverRecord!.id, newContent, 'ai');
+        return {
+          content: [{ type: 'text', text: `Nota "${args.title}" adicionada com sucesso no final do Playbook!` }]
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: 'text', text: `Erro ao adicionar nota ao playbook: ${err.message}` }]
+        };
+      }
+    }
+  );
+
   // Ferramenta 11: Gerar Dados de Teste
   mcp.tool(
     'gerar_dados_teste',
@@ -1050,170 +1083,7 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
           };
         }
 
-        const finalVariables = {
-          ...(testCase.variables_schema || {}),
-          ...(args.variablesOverride || {})
-        };
-
-        const results: any[] = [];
-        const resultsMap = new Map<string, any>();
-        
-        for (const [k, v] of Object.entries(finalVariables)) {
-          resultsMap.set(k, v);
-        }
-
-        function resolvePlaceholders(val: any): any {
-          if (typeof val === 'string') {
-            let resolved = val
-              .replace(/\{\{\s*\$randomCPF\s*\}\}/g, () => generateRandomCPF())
-              .replace(/\{\{\s*\$randomCNPJ\s*\}\}/g, () => generateRandomCNPJ())
-              .replace(/\{\{\s*\$randomEmail\s*\}\}/g, () => generateRandomEmail())
-              .replace(/\{\{\s*\$randomName\s*\}\}/g, () => generateRandomName())
-              .replace(/\{\{\s*\$randomPhone\s*\}\}/g, () => generateRandomPhone())
-              .replace(/\{\{\s*\$randomUUID\s*\}\}/g, () => generateRandomUUID());
-
-            return resolved.replace(/\{\{([^}]+)\}\}/g, (match, pathStr) => {
-              const trimmedPath = pathStr.trim();
-              if (trimmedPath.startsWith('$random')) {
-                return match;
-              }
-
-              const parts = trimmedPath.split('.');
-              const sourceId = parts[0];
-
-              if (!resultsMap.has(sourceId)) {
-                return match;
-              }
-
-              const sourceResult = resultsMap.get(sourceId);
-
-              if (parts.length === 1) {
-                if (sourceResult === null || sourceResult === undefined || typeof sourceResult !== 'object') {
-                  return String(sourceResult);
-                }
-
-                const idKeys: string[] = [];
-                const scanKeys = (obj: any, prefix = '') => {
-                  if (!obj || typeof obj !== 'object') return;
-                  for (const key of Object.keys(obj)) {
-                    const fullKey = prefix ? `${prefix}.${key}` : key;
-                    if (/id/i.test(key)) {
-                      idKeys.push(fullKey);
-                    }
-                    if (typeof obj[key] === 'object' && !Array.isArray(obj[key]) && prefix === '') {
-                      scanKeys(obj[key], key);
-                    }
-                  }
-                };
-
-                scanKeys(sourceResult);
-
-                if (idKeys.length === 1 && idKeys[0]) {
-                  let cur = sourceResult;
-                  const pathParts = idKeys[0].split('.');
-                  for (const p of pathParts) {
-                    cur = cur?.[p];
-                  }
-                  return String(cur);
-                }
-
-                if (idKeys.length > 1) {
-                  throw new Error(`Ambiguidade de ID na resposta de "${sourceId}": Foram encontradas múltiplas propriedades que contêm "id" (${idKeys.join(', ')}). Por favor, declare o caminho exato desejado (ex: {{${sourceId}.${idKeys[0] || 'id'}}}).`);
-                }
-
-                throw new Error(`Nenhum ID detectado automaticamente na resposta de "${sourceId}". Propriedades disponíveis: [${Object.keys(sourceResult).join(', ')}].`);
-              }
-
-              let current = sourceResult;
-              for (let i = 1; i < parts.length; i++) {
-                if (current === null || current === undefined) {
-                  throw new Error(`Caminho inválido "${trimmedPath}": propriedade "${parts[i]}" inexistente.`);
-                }
-                current = current[parts[i]];
-              }
-
-              return current !== undefined ? String(current) : match;
-            });
-          }
-
-          if (Array.isArray(val)) {
-            return val.map(resolvePlaceholders);
-          }
-
-          if (val && typeof val === 'object') {
-            const res: any = {};
-            for (const [k, v] of Object.entries(val)) {
-              res[k] = resolvePlaceholders(v);
-            }
-            return res;
-          }
-
-          return val;
-        }
-
-        const startTime = Date.now();
-        let status = 'success';
-        const freshServer = await getServerById(serverRecord!.id);
-
-        for (const step of testCase.steps) {
-          try {
-            const resolvedEndpoint = resolvePlaceholders(step.endpoint);
-            const resolvedBody = step.body ? resolvePlaceholders(step.body) : undefined;
-            const resolvedQuery = step.queryParams ? resolvePlaceholders(step.queryParams) : undefined;
-
-            const res = await executeGenericMcpProxy(
-              freshServer,
-              resolvedEndpoint,
-              step.method,
-              resolvedBody,
-              resolvedQuery,
-              false,
-              step.authProfileId
-            );
-
-            const isError = res.isError || (res.content && res.content[0] && res.content[0].text && res.content[0].text.startsWith('Error'));
-            let data: any = null;
-
-            if (!isError && res.content && res.content[0]) {
-              try {
-                const text = res.content[0].text;
-                const jsonText = text.replace(/^\[AVISO DO SERVIDOR MCP:[^\]]+\]\n\nResposta da API:\n/, '');
-                data = JSON.parse(jsonText);
-              } catch {
-                data = res.content[0].text;
-              }
-            }
-
-            results.push({
-              requestId: step.requestId,
-              status: isError ? 400 : 200,
-              success: !isError,
-              data: isError ? null : data,
-              error: isError ? res.content?.[0]?.text || 'Erro desconhecido' : null
-            });
-
-            resultsMap.set(step.requestId, data);
-
-            if (isError) {
-              status = 'failed';
-              break;
-            }
-          } catch (err: any) {
-            results.push({
-              requestId: step.requestId,
-              status: 500,
-              success: false,
-              data: null,
-              error: err.message
-            });
-            status = 'failed';
-            break;
-          }
-        }
-
-        const durationMs = Date.now() - startTime;
-
-        await saveTestRun(testCase.id, status, durationMs, results);
+        const runResult = await runTestCaseEngine(serverRecord!.id, testCase.id, args.variablesOverride);
 
         return {
           content: [{
@@ -1221,9 +1091,9 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
             text: JSON.stringify({
               testCaseId: testCase.id,
               name: testCase.name,
-              status,
-              durationMs,
-              steps: results
+              status: runResult.status,
+              durationMs: runResult.durationMs,
+              steps: runResult.results
             }, null, 2)
           }]
         };
@@ -1320,6 +1190,255 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
   return { mcpServer: mcp, serverRecord };
 }
 
+export async function runTestCaseEngine(
+  serverId: string,
+  testCaseId: string,
+  variablesOverride?: Record<string, any>,
+  existingTestRunId?: string
+): Promise<{ status: string; durationMs: number; results: any[] }> {
+  const freshServer = await getServerById(serverId);
+  
+  const cases = await getTestCases(serverId);
+  const testCase = cases.find(c => c.id === testCaseId);
+  if (!testCase) {
+    throw new Error(`Caso de teste com ID ${testCaseId} não encontrado.`);
+  }
+
+  const finalVariables = {
+    ...(testCase.variables_schema || {}),
+    ...(variablesOverride || {})
+  };
+
+  const results: any[] = [];
+  const resultsMap = new Map<string, any>();
+  
+  for (const [k, v] of Object.entries(finalVariables)) {
+    resultsMap.set(k, v);
+  }
+
+  function resolvePlaceholders(val: any): any {
+    if (typeof val === 'string') {
+      let resolved = val
+        .replace(/\{\{\s*\$randomCPF\s*\}\}/g, () => generateRandomCPF())
+        .replace(/\{\{\s*\$randomCNPJ\s*\}\}/g, () => generateRandomCNPJ())
+        .replace(/\{\{\s*\$randomEmail\s*\}\}/g, () => generateRandomEmail())
+        .replace(/\{\{\s*\$randomName\s*\}\}/g, () => generateRandomName())
+        .replace(/\{\{\s*\$randomPhone\s*\}\}/g, () => generateRandomPhone())
+        .replace(/\{\{\s*\$randomUUID\s*\}\}/g, () => generateRandomUUID());
+
+      return resolved.replace(/\{\{([^}]+)\}\}/g, (match, pathStr) => {
+        const trimmedPath = pathStr.trim();
+        if (trimmedPath.startsWith('$random')) return match;
+
+        const parts = trimmedPath.split('.');
+        const sourceId = parts[0];
+
+        if (!resultsMap.has(sourceId)) return match;
+
+        const sourceResult = resultsMap.get(sourceId);
+
+        if (parts.length === 1) {
+          if (sourceResult === null || sourceResult === undefined || typeof sourceResult !== 'object') {
+            return String(sourceResult);
+          }
+
+          const exactIdKeys: string[] = [];
+          const partialIdKeys: string[] = [];
+
+          const scanKeys = (obj: any, prefix = '') => {
+            if (!obj || typeof obj !== 'object') return;
+            for (const key of Object.keys(obj)) {
+              const fullKey = prefix ? `${prefix}.${key}` : key;
+              if (key.toLowerCase() === 'id') {
+                exactIdKeys.push(fullKey);
+              } else if (/id/i.test(key)) {
+                partialIdKeys.push(fullKey);
+              }
+              if (typeof obj[key] === 'object' && !Array.isArray(obj[key]) && prefix === '') {
+                scanKeys(obj[key], key);
+              }
+            }
+          };
+
+          scanKeys(sourceResult);
+
+          if (exactIdKeys.length === 1 && exactIdKeys[0]) {
+            let cur = sourceResult;
+            const pathParts = exactIdKeys[0].split('.');
+            for (const p of pathParts) {
+              cur = cur?.[p];
+            }
+            return String(cur);
+          }
+
+          if (exactIdKeys.length > 1) {
+            throw new Error(`Ambiguidade de ID exato na resposta de "${sourceId}": Foram encontradas múltiplas propriedades "id" (${exactIdKeys.join(', ')}). Por favor, declare o caminho exato desejado.`);
+          }
+
+          if (partialIdKeys.length === 1 && partialIdKeys[0]) {
+            let cur = sourceResult;
+            const pathParts = partialIdKeys[0].split('.');
+            for (const p of pathParts) {
+              cur = cur?.[p];
+            }
+            return String(cur);
+          }
+
+          if (partialIdKeys.length > 1) {
+            throw new Error(`Ambiguidade de ID na resposta de "${sourceId}": Foram encontradas múltiplas propriedades que contêm "id" (${partialIdKeys.join(', ')}). Por favor, declare o caminho exato desejado.`);
+          }
+
+          throw new Error(`Nenhum ID detectado automaticamente na resposta de "${sourceId}".`);
+        }
+
+        let current = sourceResult;
+        for (let i = 1; i < parts.length; i++) {
+          if (current === null || current === undefined) return match;
+          current = current[parts[i]];
+        }
+
+        return current !== undefined ? String(current) : match;
+      });
+    }
+
+    if (Array.isArray(val)) {
+      return val.map(resolvePlaceholders);
+    }
+
+    if (val && typeof val === 'object') {
+      const res: any = {};
+      for (const [k, v] of Object.entries(val)) {
+        res[k] = resolvePlaceholders(v);
+      }
+      return res;
+    }
+
+    return val;
+  }
+
+  const startTime = Date.now();
+  let status = 'success';
+  let failedStepIndex = -1;
+
+  for (let i = 0; i < testCase.steps.length; i++) {
+    const step = testCase.steps[i];
+    try {
+      const resolvedEndpoint = resolvePlaceholders(step.endpoint);
+      const resolvedBody = step.body ? resolvePlaceholders(step.body) : undefined;
+      const resolvedQuery = step.queryParams ? resolvePlaceholders(step.queryParams) : undefined;
+
+      const res = await executeGenericMcpProxy(
+        freshServer,
+        resolvedEndpoint,
+        step.method,
+        resolvedBody,
+        resolvedQuery,
+        false,
+        step.authProfileId
+      );
+
+      const isError = res.isError || (res.content && res.content[0] && res.content[0].text && res.content[0].text.startsWith('Error'));
+      let data: any = null;
+
+      if (!isError && res.content && res.content[0]) {
+        try {
+          const text = res.content[0].text;
+          const jsonText = text.replace(/^\[AVISO DO SERVIDOR MCP:[^\]]+\]\n\nResposta da API:\n/, '');
+          data = JSON.parse(jsonText);
+        } catch {
+          data = res.content[0].text;
+        }
+      }
+
+      results.push({
+        requestId: step.requestId,
+        status: isError ? 400 : 200,
+        success: !isError,
+        data: isError ? null : data,
+        error: isError ? res.content?.[0]?.text || 'Erro desconhecido' : null
+      });
+
+      resultsMap.set(step.requestId, data);
+
+      if (isError) {
+        status = 'failed';
+        failedStepIndex = i;
+        break;
+      }
+    } catch (err: any) {
+      results.push({
+        requestId: step.requestId,
+        status: 500,
+        success: false,
+        data: null,
+        error: err.message
+      });
+      status = 'failed';
+      failedStepIndex = i;
+      break;
+    }
+  }
+
+  // --- FASE DE TEARDOWN EM CASO DE FALHA ---
+  if (status === 'failed' && failedStepIndex !== -1) {
+    console.error(`[MCP Engine] Teste falhou no passo ${failedStepIndex + 1}. Iniciando fase de Teardown...`);
+    for (let i = failedStepIndex + 1; i < testCase.steps.length; i++) {
+      const step = testCase.steps[i];
+      if (step.method.toUpperCase() === 'DELETE') {
+        try {
+          const resolvedEndpoint = resolvePlaceholders(step.endpoint);
+          const resolvedBody = step.body ? resolvePlaceholders(step.body) : undefined;
+          const resolvedQuery = step.queryParams ? resolvePlaceholders(step.queryParams) : undefined;
+
+          console.error(`[MCP Engine Teardown] Executando limpeza no passo: ${step.requestId}`);
+          const res = await executeGenericMcpProxy(
+            freshServer,
+            resolvedEndpoint,
+            step.method,
+            resolvedBody,
+            resolvedQuery,
+            false,
+            step.authProfileId
+          );
+
+          const isError = res.isError || (res.content && res.content[0] && res.content[0].text && res.content[0].text.startsWith('Error'));
+          let data: any = null;
+          if (!isError && res.content && res.content[0]) {
+            try {
+              const text = res.content[0].text;
+              const jsonText = text.replace(/^\[AVISO DO SERVIDOR MCP:[^\]]+\]\n\nResposta da API:\n/, '');
+              data = JSON.parse(jsonText);
+            } catch {
+              data = res.content[0].text;
+            }
+          }
+
+          results.push({
+            requestId: `${step.requestId}_teardown`,
+            status: isError ? 400 : 200,
+            success: !isError,
+            data: isError ? null : data,
+            error: isError ? res.content?.[0]?.text || 'Teardown falhou' : null,
+            isTeardown: true
+          });
+        } catch (teardownErr: any) {
+          console.error(`[MCP Engine Teardown] Ignorando passo de teardown ${step.requestId} devido a erro:`, teardownErr.message);
+        }
+      }
+    }
+  }
+
+  const durationMs = Date.now() - startTime;
+
+  if (existingTestRunId) {
+    await updateTestRun(existingTestRunId, status, durationMs, results);
+  } else {
+    await saveTestRun(testCase.id, status, durationMs, results);
+  }
+
+  return { status, durationMs, results };
+}
+
 export async function startMcpEngine(targetServerId?: string) {
   console.error('[MCP Engine] Inicializando motor de busca de servidores...');
 
@@ -1335,7 +1454,7 @@ export async function startMcpEngine(targetServerId?: string) {
     return;
   }
 
-  console.error(`[MCP Engine] Servidor "${serverRecord.name}" identificado. Inicializando SDK...`);
+  console.error(`[MCP Engine] Servidor "${serverRecord.name}" identified. Inicializando SDK...`);
   console.error('[MCP Engine] Conectando transporte Stdio...');
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);

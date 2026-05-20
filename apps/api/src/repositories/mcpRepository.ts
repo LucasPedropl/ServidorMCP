@@ -428,3 +428,39 @@ export async function getTestRuns(testCaseId: string, limit = 10): Promise<TestR
   return (data || []) as TestRunRecord[];
 }
 
+export async function updateTestRun(
+  testRunId: string,
+  status: string,
+  durationMs: number,
+  logDetails: any
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('mcp_test_runs')
+    .update({
+      status,
+      duration_ms: durationMs,
+      log_details: logDetails
+    })
+    .eq('id', testRunId);
+
+  if (error) {
+    throw new Error(`Falha ao atualizar historico de teste: ${error.message}`);
+  }
+
+  const { data: run } = await supabaseAdmin
+    .from('mcp_test_runs')
+    .select('test_case_id')
+    .eq('id', testRunId)
+    .single();
+
+  if (run?.test_case_id) {
+    await supabaseAdmin
+      .from('mcp_test_cases')
+      .update({
+        last_run_status: status,
+        last_run_at: new Date().toISOString()
+      })
+      .eq('id', run.test_case_id);
+  }
+}
+

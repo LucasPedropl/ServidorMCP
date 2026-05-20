@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { startMcpEngine, createMcpServerInstance } from './services/mcpEngineService.js';
+import { startMcpEngine, createMcpServerInstance, runTestCaseEngine } from './services/mcpEngineService.js';
 import fs from 'fs';
 
 // Mapa para manter os transportes SSE ativos por ID de sessão
@@ -97,11 +97,32 @@ async function startSseServer() {
     }
   }, 5 * 60 * 1000); // Executa a cada 5 minutos
 
+  // Rota para rodar caso de teste de forma assíncrona (evita timeout de 10s da Vercel)
+  app.post('/api/v1/run-test-case', (req, res) => {
+    const { serverId, testCaseId, variablesOverride, testRunId } = req.body;
+
+    if (!serverId || !testCaseId || !testRunId) {
+      res.status(400).json({ error: 'Parâmetros serverId, testCaseId e testRunId são obrigatórios.' });
+      return;
+    }
+
+    console.error(`[Express API] Iniciando rodada de teste em background para TestCase: ${testCaseId} (Run: ${testRunId})`);
+
+    // Retorna status 202 imediatamente
+    res.status(202).json({ success: true, message: 'Execução de teste iniciada em background.' });
+
+    // Dispara execução real
+    runTestCaseEngine(serverId, testCaseId, variablesOverride, testRunId).catch((err) => {
+      console.error(`[Express API background run ERRO]: Falha ao executar caso de teste ${testCaseId}:`, err);
+    });
+  });
+
   app.listen(PORT, () => {
     console.error(`[MCP Server] Servidor Gateway SSE escutando na porta ${PORT}`);
     console.error(`[MCP Server] Endpoints disponíveis:`);
     console.error(`  - GET  http://localhost:${PORT}/mcp/:serverId       (Canal SSE)`);
     console.error(`  - POST http://localhost:${PORT}/mcp/:serverId/message (Envio de mensagens)`);
+    console.error(`  - POST http://localhost:${PORT}/api/v1/run-test-case  (Executar Caso de Teste em Background)`);
   });
 }
 

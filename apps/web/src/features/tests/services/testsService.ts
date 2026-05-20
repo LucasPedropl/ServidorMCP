@@ -36,8 +36,8 @@ export interface TestRunEntity {
   test_case_id: string;
   status: 'success' | 'failed';
   duration_ms: number;
-  results: TestRunStepResult[];
-  created_at: string;
+  log_details: TestRunStepResult[];
+  executed_at: string;
 }
 
 export async function fetchTestCasesService(serverId: string): Promise<TestCaseEntity[]> {
@@ -59,7 +59,7 @@ export async function fetchTestRunsService(testCaseId: string): Promise<TestRunE
     .from('mcp_test_runs')
     .select('*')
     .eq('test_case_id', testCaseId)
-    .order('created_at', { ascending: false });
+    .order('executed_at', { ascending: false });
 
   if (error) {
     throw new Error(error.message || 'Falha ao buscar histórico de rodadas.');
@@ -126,10 +126,45 @@ export async function runTestCaseService(
     body: JSON.stringify({ serverId, testCaseId, variablesOverride })
   });
 
-  const data = await res.json();
+  const initData = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Falha ao rodar caso de teste.');
+    throw new Error(initData.error || 'Falha ao iniciar caso de teste.');
   }
 
-  return data;
+  const { testRunId } = initData;
+  if (!testRunId) {
+    throw new Error('Nenhum ID de execução retornado pela rota.');
+  }
+
+  // Loop de polling direto no Supabase para aguardar a conclusão (máx 60 segundos)
+  let runRecord: TestRunEntity | null = null;
+  
+  for (let i = 0; i < 40; i++) { // 40 * 1.5s = 60s max
+    const { data, error } = await supabase
+      .from('mcp_test_runs')
+      .select('*')
+      .eq('id', testRunId)
+      .single();
+
+    if (error) {
+      console.error('Erro ao consultar status da rodada:', error.message);
+    } else if (data && data.status !== 'pending') {
+      runRecord = data as TestRunEntity;
+      break;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+
+  if (!runRecord) {
+    throw new Error('Timeout: O teste demorou mais de 60 segundos para ser executado.');
+  }
+
+  return {
+    success: runRecord.status === 'success',
+    status: runRecord.status as 'success' | 'failed',
+    durationMs: runRecord.duration_ms,
+    steps: runRecord.log_details || [],
+    testRun: runRecord
+  };
 }

@@ -1046,7 +1046,7 @@ export function TestsTab({ serverId, tools, authCredentials }: TestsTabProps) {
                                         <XCircle className="w-4 h-4 text-red-500" />
                                       )}
                                       <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
-                                        {new Date(run.created_at).toLocaleString()}
+                                        {new Date(run.executed_at).toLocaleString()}
                                       </span>
                                     </div>
                                     <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
@@ -1060,7 +1060,7 @@ export function TestsTab({ serverId, tools, authCredentials }: TestsTabProps) {
                                       <h6 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Detalhamento dos Passos</h6>
                                       
                                       <div className="space-y-2">
-                                        {run.results?.map((res, sIdx) => {
+                                        {run.log_details?.map((res, sIdx) => {
                                           const stepDetailsOpen = !!expandedStepDetail[`${run.id}_${sIdx}`];
                                           const stepMeta = tc.steps.find(s => s.requestId === res.requestId);
 
