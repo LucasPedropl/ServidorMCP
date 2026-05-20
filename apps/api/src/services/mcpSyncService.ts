@@ -1,6 +1,40 @@
 import fetch from 'node-fetch';
 import { getServerById, getToolsByServerId, saveSyncReport, insertToolsBatch, updateToolSchema } from '../repositories/mcpRepository.js';
 
+function resolveRefs(schema: any, root: any, visited = new Set<string>()): any {
+  if (!schema || typeof schema !== 'object') return schema;
+
+  if (schema.$ref && typeof schema.$ref === 'string') {
+    const refPath = schema.$ref;
+    if (visited.has(refPath)) {
+      return { type: 'object', description: `Circular reference to ${refPath}` };
+    }
+    if (refPath.startsWith('#/')) {
+      const parts = refPath.substring(2).split('/');
+      let current = root;
+      for (const part of parts) {
+        current = current?.[part];
+      }
+      if (current) {
+        const nextVisited = new Set(visited);
+        nextVisited.add(refPath);
+        return resolveRefs(current, root, nextVisited);
+      }
+    }
+    return schema;
+  }
+
+  if (Array.isArray(schema)) {
+    return schema.map(item => resolveRefs(item, root, visited));
+  }
+
+  const resolved: any = {};
+  for (const [key, val] of Object.entries(schema)) {
+    resolved[key] = resolveRefs(val, root, visited);
+  }
+  return resolved;
+}
+
 export async function runServerSyncService(serverId: string): Promise<string> {
   const server = await getServerById(serverId);
   if (!server.swagger_url) {
@@ -21,8 +55,10 @@ export async function runServerSyncService(serverId: string): Promise<string> {
     throw new Error('O JSON retornado nao parece ser um OpenAPI ou Swagger valido.');
   }
 
+  const resolvedData = resolveRefs(data, data);
   const freshTools: any[] = [];
-  const paths = data.paths || {};
+  const paths = resolvedData.paths || {};
+
 
   for (const [pathKey, pathItem] of Object.entries(paths)) {
     if (!pathItem || typeof pathItem !== 'object') continue;

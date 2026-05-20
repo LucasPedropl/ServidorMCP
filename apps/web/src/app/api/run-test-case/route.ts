@@ -126,12 +126,18 @@ export async function POST(request: Request) {
               return String(sourceResult);
             }
 
-            const idKeys: string[] = [];
+            const exactIdKeys: string[] = [];
+            const partialIdKeys: string[] = [];
+
             const scanKeys = (obj: any, prefix = '') => {
               if (!obj || typeof obj !== 'object') return;
               for (const key of Object.keys(obj)) {
                 const fullKey = prefix ? `${prefix}.${key}` : key;
-                if (/id/i.test(key)) idKeys.push(fullKey);
+                if (key.toLowerCase() === 'id') {
+                  exactIdKeys.push(fullKey);
+                } else if (/id/i.test(key)) {
+                  partialIdKeys.push(fullKey);
+                }
                 if (typeof obj[key] === 'object' && !Array.isArray(obj[key]) && prefix === '') {
                   scanKeys(obj[key], key);
                 }
@@ -140,9 +146,20 @@ export async function POST(request: Request) {
 
             scanKeys(sourceResult);
 
-            if (idKeys.length === 1 && idKeys[0]) {
+            // 1. Se achou exatamente uma chave de ID exato (ex: "id" ou "data.id")
+            if (exactIdKeys.length === 1 && exactIdKeys[0]) {
               let cur = sourceResult;
-              const pathParts = idKeys[0].split('.');
+              const pathParts = exactIdKeys[0].split('.');
+              for (const p of pathParts) {
+                cur = cur?.[p];
+              }
+              return String(cur);
+            }
+
+            // 2. Fallback para chaves parciais (ex: "empresa_id") se não houver um "id" exato
+            if (partialIdKeys.length === 1 && partialIdKeys[0]) {
+              let cur = sourceResult;
+              const pathParts = partialIdKeys[0].split('.');
               for (const p of pathParts) {
                 cur = cur?.[p];
               }

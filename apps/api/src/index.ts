@@ -29,6 +29,7 @@ async function startSseServer() {
       // Configura o transporte SSE apontando para a rota de recebimento de mensagens
       const transport = new SSEServerTransport(`/mcp/${serverId}/message`, res);
       const sessionId = transport.sessionId;
+      (transport as any).lastActiveAt = Date.now();
       activeTransports[sessionId] = transport;
 
       transport.onclose = () => {
@@ -66,6 +67,8 @@ async function startSseServer() {
       return;
     }
 
+    (transport as any).lastActiveAt = Date.now();
+
     try {
       await transport.handlePostMessage(req, res, req.body);
     } catch (err: any) {
@@ -75,6 +78,24 @@ async function startSseServer() {
       }
     }
   });
+
+  // Limpeza periódica de conexões SSE fantasma/inativas (Watchdog)
+  setInterval(() => {
+    const now = Date.now();
+    const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutos
+    for (const [sessionId, transport] of Object.entries(activeTransports)) {
+      const lastActive = (transport as any).lastActiveAt || 0;
+      if (now - lastActive > TIMEOUT_MS) {
+        console.error(`[MCP SSE Watchdog] Limpando sessão fantasma inativa: ${sessionId}`);
+        try {
+          transport.close();
+        } catch (e) {
+          // Ignora erro ao fechar
+        }
+        delete activeTransports[sessionId];
+      }
+    }
+  }, 5 * 60 * 1000); // Executa a cada 5 minutos
 
   app.listen(PORT, () => {
     console.error(`[MCP Server] Servidor Gateway SSE escutando na porta ${PORT}`);
