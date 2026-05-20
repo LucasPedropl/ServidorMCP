@@ -2,160 +2,54 @@ import fetch from 'node-fetch';
 import { updateServerCredentials, getToolsByServerId } from '../repositories/mcpRepository.js';
 import type { ServerRecord, ToolRecord } from '../repositories/mcpRepository.js';
 
-const tokenCache = new Map<string, string>();
-const tokenAcquiredAtCache = new Map<string, number>();
+// Importa e Re-exporta para compatibilidade com outras partes do sistema
+import { proxyLogs, pushProxyLog } from './mcpProxy/proxyLogger.js';
+import { checkRouteBlock, postProcessProxyResult } from './mcpProxy/proxyBlocker.js';
+import {
+  tokenCache,
+  tokenAcquiredAtCache,
+  globalSessionHeaders,
+  clearProxyTokenCache,
+  resolveActiveAuth,
+  performAutoLogin
+} from './mcpProxy/proxyAuth.js';
 
-// Headers globais definidos na sessão (serverId -> Record<string, string>)
-export const globalSessionHeaders = new Map<string, Record<string, string>>();
+export {
+  proxyLogs,
+  pushProxyLog,
+  tokenCache,
+  tokenAcquiredAtCache,
+  globalSessionHeaders,
+  clearProxyTokenCache,
+  resolveActiveAuth,
+  performAutoLogin
+};
 
-interface ResolvedAuth {
-  currentToken: string | undefined;
-  activeProfileId: string;
-  allowedProfiles: string[];
-}
+export type { ProxyRequestLog } from './mcpProxy/proxyLogger.js';
 
-function resolveActiveAuth(server: ServerRecord, authReqRaw: any, isAutoLogin: boolean, isRetry: boolean): ResolvedAuth {
-  const creds = server.auth_credentials;
-  const authReqList: string[] = Array.isArray(authReqRaw)
-    ? authReqRaw
-    : (typeof authReqRaw === 'string' ? [authReqRaw] : ['none']);
-  
-  const allowedProfiles = authReqList.filter(p => p !== 'none');
-  
-  if (allowedProfiles.length === 0) {
-    return { currentToken: undefined, activeProfileId: 'default', allowedProfiles };
-  }
-
-  let currentToken: string | undefined = undefined;
-  let activeProfileId = allowedProfiles[0] || 'default';
-
-  for (const profId of allowedProfiles) {
-    const cacheKey = `${server.id}:${profId}`;
-    let tok = tokenCache.get(cacheKey);
-
-    if (!tok && creds?.profiles && Array.isArray(creds.profiles)) {
-      const prof = creds.profiles.find((p: any) => p.id === profId);
-      if (prof && prof.token) {
-        tok = prof.token as string;
-        tokenCache.set(cacheKey, tok);
-      }
-    }
-    if (!tok && creds?.token && profId === 'default') {
-      tok = creds.token as string;
-      tokenCache.set(cacheKey, tok);
-    }
-
-    if (tok && creds?.profiles && Array.isArray(creds.profiles)) {
-      const prof = creds.profiles.find((p: any) => p.id === profId);
-      if (prof && prof.tokenDurationMinutes) {
-        const acquiredAt = tokenAcquiredAtCache.get(cacheKey);
-        if (acquiredAt) {
-          const elapsedMinutes = (Date.now() - acquiredAt) / (1000 * 60);
-          if (elapsedMinutes >= Number(prof.tokenDurationMinutes)) {
-            console.error(`[MCP Proxy] Token do perfil ${profId} expirou. Limpando para login...`);
-            tokenCache.delete(cacheKey);
-            tokenAcquiredAtCache.delete(cacheKey);
-            tok = undefined;
-          }
+export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord, args: any, isRetry = false): Promise<any> {
+  const blockCheck = checkRouteBlock(server.id, tool.http_method, tool.endpoint_path);
+  if (blockCheck.isBlocked) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `[BLOQUEIO DE SEGURANÇA MCP] Esta rota foi temporariamente desativada nesta sessão para evitar loops infinitos de IA e desperdício de tokens. Descreva o cenário atual para o usuário no chat e peça para reiniciar a tarefa.\nRota: [${tool.http_method.toUpperCase()}] ${tool.endpoint_path}`
         }
-      }
-    }
-
-    if (tok) {
-      currentToken = tok;
-      activeProfileId = profId;
-      break;
-    }
-  }
-
-  return { currentToken, activeProfileId, allowedProfiles };
-}
-
-async function performAutoLogin(server: ServerRecord, profileId?: string): Promise<{ token: string; profileId: string }> {
-  const creds = server.auth_credentials;
-  if (!creds || creds.authMode !== 'auto_login') {
-    throw new Error('Servidor não está configurado para auto_login.');
-  }
-
-  let profile: any = null;
-  if (creds.profiles && Array.isArray(creds.profiles)) {
-    if (profileId && profileId !== 'none') {
-      profile = creds.profiles.find((p: any) => p.id === profileId);
-    }
-    if (!profile && creds.profiles.length > 0) {
-      profile = creds.profiles[0];
-    }
-  }
-
-  if (!profile) {
-    profile = {
-      id: 'default',
-      name: 'Padrão',
-      loginEndpoint: creds.loginEndpoint || '',
-      loginMethod: creds.loginMethod || 'POST',
-      loginPayload: creds.loginPayload || '',
-      tokenPath: creds.tokenPath || 'token'
+      ],
+      isError: true
     };
   }
 
-  const loginUrl = `${server.api_base_url.replace(/\/$/, '')}/${profile.loginEndpoint.replace(/^\//, '')}`;
-  const method = (profile.loginMethod || 'POST').toUpperCase();
-  
-  let bodyPayload: any = null;
-  if (profile.loginPayload) {
-    try {
-      bodyPayload = typeof profile.loginPayload === 'string' ? JSON.parse(profile.loginPayload) : profile.loginPayload;
-    } catch (e) {
-      throw new Error(`Falha ao fazer parse do JSON de loginPayload do perfil ${profile.name}.`);
-    }
-  }
+  let headers: Record<string, string> = {};
+  let bodyPayload: any = undefined;
+  let activeProfileId: string | undefined = undefined;
+  let queryParamsObj: Record<string, any> = {};
 
-  console.error(`[MCP Proxy AutoLogin] Disparando ${method} para ${loginUrl} (Perfil: ${profile.name})...`);
-
-  const res = await fetch(loginUrl, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: bodyPayload ? JSON.stringify(bodyPayload) : null,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Falha no AutoLogin (${res.status} ${res.statusText}): ${errText}`);
-  }
-
-  const data = await res.json();
-
-  const pathParts = (profile.tokenPath || 'token').split('.');
-  let token: any = data;
-  for (const part of pathParts) {
-    if (token && typeof token === 'object') {
-      token = token[part];
-    } else {
-      token = null;
-      break;
-    }
-  }
-
-  if (!token || typeof token !== 'string') {
-    throw new Error(`Token não encontrado no caminho "${profile.tokenPath}" da resposta de login: ${JSON.stringify(data)}`);
-  }
-
-  console.error(`[MCP Proxy AutoLogin] Token obtido com sucesso para o servidor ${server.name} (Perfil: ${profile.name})!`);
-  const cacheKey = `${server.id}:${profile.id}`;
-  tokenCache.set(cacheKey, token);
-  tokenCache.set(server.id, token); // fallback legacy
-  tokenAcquiredAtCache.set(cacheKey, Date.now());
-  return { token, profileId: profile.id };
-}
-
-export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord, args: any, isRetry = false): Promise<any> {
   try {
     let url = `${server.api_base_url.replace(/\/$/, '')}/${tool.endpoint_path.replace(/^\//, '')}`;
     const method = tool.http_method.toUpperCase();
-    const headers: Record<string, string> = {
+    headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
@@ -171,7 +65,8 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
     const isAutoLogin = creds && creds.authMode === 'auto_login';
     const authReqRaw = tool.parameters_schema?.authRequirement || 'none';
     const authRes = resolveActiveAuth(server, authReqRaw, isAutoLogin, isRetry);
-    let { currentToken, activeProfileId, allowedProfiles } = authRes;
+    let { currentToken, allowedProfiles } = authRes;
+    activeProfileId = authRes.activeProfileId;
 
     if (allowedProfiles.length > 0) {
       if (isAutoLogin && !currentToken && !isRetry) {
@@ -192,7 +87,8 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
     }
 
     const queryParams = new URLSearchParams();
-    let bodyPayload: any = undefined;
+    queryParamsObj = {};
+    bodyPayload = undefined;
 
     for (const [key, val] of Object.entries(args)) {
       if (key === 'body') {
@@ -203,6 +99,7 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
         url = url.replace(`{${key}}`, encodeURIComponent(String(val)));
       } else {
         queryParams.append(key, String(val));
+        queryParamsObj[key] = val;
       }
     }
 
@@ -253,10 +150,12 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
       return await executeMcpToolProxy(server, tool, args, true);
     }
 
-    return processResponse(response, server, activeProfileId);
+    const rawResult = await processResponse(response, server, activeProfileId, tool.endpoint_path, tool.http_method, headers, bodyPayload, queryParamsObj);
+    return postProcessProxyResult(server.id, tool.http_method, tool.endpoint_path, rawResult);
   } catch (err: any) {
     console.error(`[MCP Proxy Fatal Error] ${tool.custom_name}:`, err);
-    return handleError(err);
+    const rawErr = handleError(err, tool.endpoint_path, tool.http_method, headers, bodyPayload, activeProfileId, queryParamsObj);
+    return postProcessProxyResult(server.id, tool.http_method, tool.endpoint_path, rawErr);
   }
 }
 
@@ -269,9 +168,25 @@ export async function executeGenericMcpProxy(
   isRetry = false,
   forcedProfileId?: string
 ): Promise<any> {
+  const blockCheck = checkRouteBlock(server.id, method, endpoint);
+  if (blockCheck.isBlocked) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `[BLOQUEIO DE SEGURANÇA MCP] Esta rota foi temporariamente desativada nesta sessão para evitar loops infinitos de IA e desperdício de tokens. Descreva o cenário atual para o usuário no chat e peça para reiniciar a tarefa.\nRota: [${method.toUpperCase()}] ${endpoint}`
+        }
+      ],
+      isError: true
+    };
+  }
+
+  let headers: Record<string, string> = {};
+  let activeProfileId: string | undefined = undefined;
+
   try {
     let url = `${server.api_base_url.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
-    const headers: Record<string, string> = {
+    headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
@@ -301,7 +216,8 @@ export async function executeGenericMcpProxy(
     const expectedContentType = matchedTool?.parameters_schema?.contentType || 'application/json';
 
     const authRes = resolveActiveAuth(server, authReqRaw, isAutoLogin, isRetry);
-    let { currentToken, activeProfileId, allowedProfiles } = authRes;
+    let { currentToken, allowedProfiles } = authRes;
+    activeProfileId = authRes.activeProfileId;
 
     if (allowedProfiles.length > 0) {
       if (isAutoLogin && !currentToken && !isRetry) {
@@ -365,14 +281,12 @@ export async function executeGenericMcpProxy(
       body: fetchBody,
     });
 
-    // Se falhar com 401 e o perfil tiver Auto-Login, tenta renovar o token e repetir
     if (response.status === 401 && isAutoLogin && allowedProfiles.length > 0 && !isRetry) {
       console.error(`[MCP Proxy AVISO] Recebido 401 Unauthorized de ${url}. Renovando token do perfil ${activeProfileId} via AutoLogin...`);
       await performAutoLogin(server, activeProfileId);
       return await executeGenericMcpProxy(server, endpoint, method, body, queryParams, true, forcedProfileId);
     }
 
-    // Se falhar com 401/403, e a chamada era pública (sem override explicitado) tenta todos os perfis ativos do servidor
     if ((response.status === 401 || response.status === 403) && !forcedProfileId && allowedProfiles.length === 0) {
       const allProfiles = creds?.profiles && Array.isArray(creds.profiles) ? creds.profiles : [];
       console.error(`[MCP Proxy Fallback] Endpoint público retornou ${response.status}. Iniciando varredura por ${allProfiles.length} perfis alternativos...`);
@@ -399,11 +313,11 @@ export async function executeGenericMcpProxy(
 
             if (fallbackResponse.ok) {
               console.error(`[MCP Proxy Fallback] SUCESSO com o perfil "${profile.name}"!`);
-              const processed = await processResponse(fallbackResponse, server, profile.id);
+              const processed = await processResponse(fallbackResponse, server, profile.id, endpoint, method, headers, body, queryParams);
               if (!processed.isError && processed.content && processed.content[0]) {
                 processed.content[0].text = `[AVISO DO SERVIDOR MCP: Este endpoint não possui autenticação cadastrada (público), mas a requisição retornou status ${response.status}. O servidor tentou autenticar automaticamente e obteve SUCESSO utilizando o perfil "${profile.name}" (ID: ${profile.id}). Por favor, informe ao usuário para atualizar as configurações de autenticação desta ferramenta no dashboard.]\n\nResposta da API:\n${processed.content[0].text}`;
               }
-              return processed;
+              return postProcessProxyResult(server.id, method, endpoint, processed);
             } else {
               console.error(`[MCP Proxy Fallback] Perfil "${profile.name}" falhou com status ${fallbackResponse.status}.`);
             }
@@ -414,21 +328,68 @@ export async function executeGenericMcpProxy(
       }
     }
 
-    return processResponse(response, server, activeProfileId);
+    const rawResult = await processResponse(response, server, activeProfileId, endpoint, method, headers, body, queryParams);
+    return postProcessProxyResult(server.id, method, endpoint, rawResult);
   } catch (err: any) {
     console.error(`[MCP Proxy Fatal Error] generico:`, err);
-    return handleError(err);
+    const rawErr = handleError(err, endpoint, method, headers, body, activeProfileId, queryParams);
+    return postProcessProxyResult(server.id, method, endpoint, rawErr);
   }
 }
 
-async function processResponse(response: any, server: ServerRecord, profileId = 'default') {
+async function processResponse(
+  response: any,
+  server: ServerRecord,
+  profileId: string,
+  endpoint: string,
+  method: string,
+  requestHeaders: Record<string, string>,
+  requestBody: any,
+  queryParams?: Record<string, any>
+) {
   const contentType = response.headers.get('content-type') || '';
   let responseData: any;
 
   if (contentType.includes('application/json')) {
-    responseData = await response.json();
+    try {
+      responseData = await response.json();
+    } catch {
+      responseData = null;
+    }
   } else {
     responseData = await response.text();
+  }
+
+  try {
+    const responseHeaders: Record<string, string> = {};
+    if (response.headers && typeof response.headers.forEach === 'function') {
+      response.headers.forEach((v: string, k: string) => {
+        responseHeaders[k] = v;
+      });
+    }
+
+    const safeHeaders = { ...requestHeaders };
+    if (safeHeaders['Authorization'] && typeof safeHeaders['Authorization'] === 'string') {
+      const parts = safeHeaders['Authorization'].split(' ');
+      if (parts[1]) {
+        safeHeaders['Authorization'] = `${parts[0]} ${parts[1].substring(0, 10)}... (truncated)`;
+      }
+    }
+
+    pushProxyLog({
+      timestamp: new Date().toISOString(),
+      endpoint,
+      method,
+      requestHeaders: safeHeaders,
+      requestBody,
+      queryParams,
+      responseStatus: response.status,
+      responseHeaders,
+      responseBody: responseData,
+      authProfileId: profileId
+    });
+  } catch (logErr: any) {
+    console.error('[MCP Proxy Logger Erro] Falha ao registrar log no buffer:', logErr.message);
   }
 
   if (response.ok && responseData && typeof responseData === 'object') {
@@ -472,7 +433,40 @@ async function processResponse(response: any, server: ServerRecord, profileId = 
   };
 }
 
-function handleError(err: any) {
+function handleError(
+  err: any,
+  endpoint: string,
+  method: string,
+  requestHeaders: Record<string, string>,
+  requestBody: any,
+  profileId?: string,
+  queryParams?: Record<string, any>
+) {
+  try {
+    const safeHeaders = { ...requestHeaders };
+    if (safeHeaders['Authorization'] && typeof safeHeaders['Authorization'] === 'string') {
+      const parts = safeHeaders['Authorization'].split(' ');
+      if (parts[1]) {
+        safeHeaders['Authorization'] = `${parts[0]} ${parts[1].substring(0, 10)}... (truncated)`;
+      }
+    }
+
+    pushProxyLog({
+      timestamp: new Date().toISOString(),
+      endpoint,
+      method,
+      requestHeaders: safeHeaders,
+      requestBody,
+      queryParams,
+      responseStatus: 500,
+      responseHeaders: {},
+      responseBody: { error: err.message, stack: err.stack },
+      authProfileId: profileId
+    });
+  } catch (logErr: any) {
+    console.error('[MCP Proxy Logger Erro] Falha ao registrar log de erro no buffer:', logErr.message);
+  }
+
   return {
     content: [{ type: 'text', text: `Falha interna no proxy MCP: ${err.message}` }],
     isError: true,
