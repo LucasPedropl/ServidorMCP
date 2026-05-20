@@ -22,10 +22,47 @@ import {
   updateTestRun
 } from '../repositories/mcpRepository.js';
 import type { ServerRecord, ToolRecord, CategoryRecord, TestCaseRecord, TestRunRecord } from '../repositories/mcpRepository.js';
-import { executeGenericMcpProxy } from './mcpProxyService.js';
+import { executeGenericMcpProxy, globalSessionHeaders } from './mcpProxyService.js';
 import { runServerSyncService } from './mcpSyncService.js';
 import { z } from 'zod';
 import crypto from 'crypto';
+import { webhookBins } from '../index.js';
+
+// Entidades registradas para teardown automático na desconexão (serverId -> Array<{ endpoint: string, method: string, authProfileId?: string }>)
+export const serverTeardownRegistry = new Map<string, Array<{ endpoint: string, method: string, authProfileId?: string }>>();
+
+export async function executeServerTeardown(serverId: string): Promise<void> {
+  const registry = serverTeardownRegistry.get(serverId);
+  if (!registry || registry.length === 0) return;
+
+  console.error(`[Teardown Coletor de Lixo] Executando limpeza de ${registry.length} entidades para o servidor ${serverId}...`);
+  const freshServer = await getServerById(serverId);
+  if (!freshServer) return;
+
+  // Processa na ordem inversa de criação (LIFO)
+  const itemsToClean = [...registry].reverse();
+  
+  // Limpa o registro imediatamente para evitar execuções concorrentes duplicadas
+  serverTeardownRegistry.set(serverId, []);
+
+  for (const item of itemsToClean) {
+    try {
+      console.error(`[Teardown Coletor de Lixo] Removendo: ${item.method} ${item.endpoint}`);
+      await executeGenericMcpProxy(
+        freshServer,
+        item.endpoint,
+        item.method,
+        undefined, // body
+        undefined, // query
+        false,
+        item.authProfileId
+      );
+    } catch (err: any) {
+      console.error(`[Teardown Coletor de Lixo Erro] Falha ao remover ${item.endpoint}:`, err.message);
+    }
+  }
+}
+
 
 function generateRandomCPF(): string {
   const num = () => Math.floor(Math.random() * 9);
@@ -1187,7 +1224,167 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
     }
   );
 
+  // Ferramenta 18: Configurar Headers Globais
+  mcp.tool(
+    'configurar_headers_globais',
+    'Permite registrar cabeçalhos (headers) HTTP globais na sessão atual (ex: X-Tenant-ID ou IDs de inquilinos). Esses cabeçalhos serão injetados de forma invisível em todas as requisições subsequentes do proxy MCP.',
+    {
+      headers: z.record(z.string(), z.string()).describe('Dicionário de cabeçalhos chave-valor')
+    },
+    async (args) => {
+      console.error(`[MCP Tool Executada] IA chamou "configurar_headers_globais"`);
+      try {
+        globalSessionHeaders.set(serverRecord!.id, args.headers);
+        return {
+          content: [{
+            type: 'text',
+            text: `Headers globais configurados com sucesso para o servidor: ${JSON.stringify(args.headers)}`
+          }]
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: 'text', text: `Erro ao configurar headers globais: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // Ferramenta 19: Registrar Entidade Teardown (Coletor de Lixo)
+  mcp.tool(
+    'registrar_entidade_teardown',
+    'Registra um endpoint e método de exclusão (ex: DELETE /api/v1/Usuarios/123) para remoção automática ao encerrar a conexão/sessão SSE ativa, mantendo o banco livre de sujeira de testes avulsos.',
+    {
+      endpoint: z.string().describe('O caminho relativo do recurso. Ex: /api/v1/Usuarios/123'),
+      method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).optional().default('DELETE').describe('Método HTTP de exclusão (geralmente DELETE)'),
+      authProfileId: z.string().optional().describe('ID opcional de perfil de autenticação para forçar no delete')
+    },
+    async (args) => {
+      console.error(`[MCP Tool Executada] IA chamou "registrar_entidade_teardown" para ${args.method || 'DELETE'} ${args.endpoint}`);
+      try {
+        if (!serverTeardownRegistry.has(serverRecord!.id)) {
+          serverTeardownRegistry.set(serverRecord!.id, []);
+        }
+        const cleanupItem: { endpoint: string; method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'; authProfileId?: string } = {
+          endpoint: args.endpoint,
+          method: args.method || 'DELETE'
+        };
+        if (args.authProfileId !== undefined) {
+          cleanupItem.authProfileId = args.authProfileId;
+        }
+        serverTeardownRegistry.get(serverRecord!.id)!.push(cleanupItem);
+        return {
+          content: [{
+            type: 'text',
+            text: `Entidade registrada para remoção automática na desconexão: ${args.method || 'DELETE'} ${args.endpoint}`
+          }]
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: 'text', text: `Erro ao registrar teardown: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // Ferramenta 20: Criar Webhook Bin
+  mcp.tool(
+    'criar_webhook_bin',
+    'Gera uma URL única de Webhook temporária para testes assíncronos. Retorna a URL pública/local para ser enviada na chamada HTTP da API testada.',
+    {},
+    async () => {
+      console.error(`[MCP Tool Executada] IA chamou "criar_webhook_bin"`);
+      try {
+        const binId = crypto.randomUUID();
+        webhookBins.set(binId, []);
+        const port = process.env.PORT || 3001;
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || `http://localhost:${port}`;
+        const webhookUrl = `${baseUrl.replace(/\/$/, '')}/api/v1/webhook-bin/${binId}`;
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ binId, webhookUrl }, null, 2)
+          }]
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: 'text', text: `Erro ao criar webhook bin: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // Ferramenta 21: Inspecionar Webhook Bin
+  mcp.tool(
+    'inspecionar_webhook_bin',
+    'Consulta a lista de payloads recebidos no Webhook Bin especificado (útil para auditoria/polling após chamadas assíncronas).',
+    {
+      binId: z.string().describe('ID do webhook bin gerado anteriormente')
+    },
+    async (args) => {
+      console.error(`[MCP Tool Executada] IA chamou "inspecionar_webhook_bin" para o bin: ${args.binId}`);
+      try {
+        const payloads = webhookBins.get(args.binId) || [];
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ binId: args.binId, count: payloads.length, webhooks: payloads }, null, 2)
+          }]
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: 'text', text: `Erro ao inspecionar webhook bin: ${err.message}` }]
+        };
+      }
+    }
+  );
+
   return { mcpServer: mcp, serverRecord };
+}
+
+function getValueByPath(obj: any, path: string): any {
+  if (obj === null || obj === undefined) return undefined;
+  const normalizedPath = path.replace(/^\$\.?/, '');
+  if (!normalizedPath) return obj;
+
+  const parts = normalizedPath.split('.');
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== 'object') {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function evaluateAssertion(data: any, assertion: { path: string; operator: string; value?: any }): { success: boolean; message: string } {
+  const actualValue = getValueByPath(data, assertion.path);
+  const operator = assertion.operator;
+  const expectedValue = assertion.value;
+
+  switch (operator) {
+    case 'eq':
+      if (actualValue === expectedValue) return { success: true, message: `Asserção OK: ${assertion.path} é igual a ${expectedValue}` };
+      return { success: false, message: `Asserção FALHOU: esperado ${assertion.path} ser igual a ${expectedValue}, mas obteve ${actualValue}` };
+    case 'neq':
+      if (actualValue !== expectedValue) return { success: true, message: `Asserção OK: ${assertion.path} é diferente de ${expectedValue}` };
+      return { success: false, message: `Asserção FALHOU: esperado ${assertion.path} ser diferente de ${expectedValue}, mas obteve ${actualValue}` };
+    case 'contains':
+      if (typeof actualValue === 'string' && actualValue.includes(String(expectedValue))) {
+        return { success: true, message: `Asserção OK: ${assertion.path} contém '${expectedValue}'` };
+      }
+      if (Array.isArray(actualValue) && actualValue.includes(expectedValue)) {
+        return { success: true, message: `Asserção OK: array ${assertion.path} contém ${expectedValue}` };
+      }
+      return { success: false, message: `Asserção FALHOU: esperado ${assertion.path} conter ${expectedValue}, mas obteve ${JSON.stringify(actualValue)}` };
+    case 'not_null':
+      if (actualValue !== null && actualValue !== undefined && actualValue !== '') {
+        return { success: true, message: `Asserção OK: ${assertion.path} não é nulo/vazio` };
+      }
+      return { success: false, message: `Asserção FALHOU: esperado ${assertion.path} não ser nulo/vazio, mas obteve ${actualValue}` };
+    default:
+      return { success: false, message: `Asserção FALHOU: operador desconhecido '${operator}'` };
+  }
 }
 
 export async function runTestCaseEngine(
@@ -1350,17 +1547,35 @@ export async function runTestCaseEngine(
         }
       }
 
+      let assertionFailed = false;
+      let assertionErrorMessage = '';
+
+      if (!isError && (step as any).assertions && Array.isArray((step as any).assertions)) {
+        for (const assertion of (step as any).assertions) {
+          const evalRes = evaluateAssertion(data, assertion);
+          if (!evalRes.success) {
+            assertionFailed = true;
+            assertionErrorMessage = evalRes.message;
+            break;
+          }
+        }
+      }
+
+      const hasFailed = isError || assertionFailed;
+
       results.push({
         requestId: step.requestId,
-        status: isError ? 400 : 200,
-        success: !isError,
+        status: hasFailed ? 400 : 200,
+        success: !hasFailed,
         data: isError ? null : data,
-        error: isError ? res.content?.[0]?.text || 'Erro desconhecido' : null
+        error: isError 
+          ? (res.content?.[0]?.text || 'Erro desconhecido') 
+          : (assertionFailed ? assertionErrorMessage : null)
       });
 
       resultsMap.set(step.requestId, data);
 
-      if (isError) {
+      if (hasFailed) {
         status = 'failed';
         failedStepIndex = i;
         break;

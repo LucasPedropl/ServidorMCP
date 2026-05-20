@@ -5,6 +5,9 @@ import type { ServerRecord, ToolRecord } from '../repositories/mcpRepository.js'
 const tokenCache = new Map<string, string>();
 const tokenAcquiredAtCache = new Map<string, number>();
 
+// Headers globais definidos na sessão (serverId -> Record<string, string>)
+export const globalSessionHeaders = new Map<string, Record<string, string>>();
+
 interface ResolvedAuth {
   currentToken: string | undefined;
   activeProfileId: string;
@@ -157,6 +160,13 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
       'Accept': 'application/json',
     };
 
+    const sessionHeaders = globalSessionHeaders.get(server.id);
+    if (sessionHeaders) {
+      for (const [k, v] of Object.entries(sessionHeaders)) {
+        headers[k] = v;
+      }
+    }
+
     const creds = server.auth_credentials;
     const isAutoLogin = creds && creds.authMode === 'auto_login';
     const authReqRaw = tool.parameters_schema?.authRequirement || 'none';
@@ -265,6 +275,13 @@ export async function executeGenericMcpProxy(
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
+
+    const sessionHeaders = globalSessionHeaders.get(server.id);
+    if (sessionHeaders) {
+      for (const [k, v] of Object.entries(sessionHeaders)) {
+        headers[k] = v;
+      }
+    }
 
     const creds = server.auth_credentials;
     const isAutoLogin = creds && creds.authMode === 'auto_login';

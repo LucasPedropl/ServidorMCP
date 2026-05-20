@@ -1,11 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { startMcpEngine, createMcpServerInstance, runTestCaseEngine } from './services/mcpEngineService.js';
+import { startMcpEngine, createMcpServerInstance, runTestCaseEngine, executeServerTeardown } from './services/mcpEngineService.js';
 import fs from 'fs';
 
 // Mapa para manter os transportes SSE ativos por ID de sessão
 const activeTransports: Record<string, SSEServerTransport> = {};
+
+// Bins de webhook para testes assíncronos (ID -> array de payloads recebidos)
+export const webhookBins = new Map<string, any[]>();
 
 async function startSseServer() {
   const app = express();
@@ -35,11 +38,19 @@ async function startSseServer() {
       transport.onclose = () => {
         console.error(`[MCP SSE] Conexão encerrada para a sessão: ${sessionId}`);
         delete activeTransports[sessionId];
+        executeServerTeardown(serverId).catch(err => {
+          console.error(`[MCP SSE Teardown Erro]:`, err);
+        });
       };
 
       res.on('close', () => {
         console.error(`[MCP SSE] Conexão física fechada pelo cliente (Sessão: ${sessionId})`);
-        delete activeTransports[sessionId];
+        if (activeTransports[sessionId]) {
+          delete activeTransports[sessionId];
+          executeServerTeardown(serverId).catch(err => {
+            console.error(`[MCP SSE Teardown Erro]:`, err);
+          });
+        }
       });
 
       await mcpServer.connect(transport);
@@ -96,6 +107,33 @@ async function startSseServer() {
       }
     }
   }, 5 * 60 * 1000); // Executa a cada 5 minutos
+
+  // Webhook Receiver - POST para receber payloads do webhook
+  app.post('/api/v1/webhook-bin/:binId', (req, res) => {
+    const { binId } = req.params;
+    console.error(`[Webhook Bin] Recebido POST no bin: ${binId}`);
+    
+    if (!webhookBins.has(binId)) {
+      webhookBins.set(binId, []);
+    }
+    
+    const payloads = webhookBins.get(binId)!;
+    payloads.push({
+      timestamp: new Date().toISOString(),
+      headers: req.headers,
+      body: req.body,
+      query: req.query
+    });
+    
+    res.status(200).json({ success: true, message: 'Webhook recebido com sucesso.' });
+  });
+
+  // Webhook Bin Auditor - GET para consultar os payloads recebidos
+  app.get('/api/v1/webhook-bin/:binId', (req, res) => {
+    const { binId } = req.params;
+    const payloads = webhookBins.get(binId) || [];
+    res.status(200).json({ success: true, binId, count: payloads.length, webhooks: payloads });
+  });
 
   // Rota para rodar caso de teste de forma assíncrona (evita timeout de 10s da Vercel)
   app.post('/api/v1/run-test-case', (req, res) => {
