@@ -39,12 +39,28 @@ export function ConnectClientModal({ isOpen, onClose, serverName, serverId }: Co
   const [connectionUrl, setConnectionUrl] = useState<string>('');
 
   React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const { protocol, hostname } = window.location;
-      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL 
-        || (hostname === 'localhost' || hostname === '127.0.0.1' ? `${protocol}//${hostname}:3001` : `${protocol}//${window.location.host}`);
-      setConnectionUrl(`${apiBaseUrl}/mcp/${serverId}`);
+    async function buildConnectionUrl() {
+      if (typeof window !== 'undefined') {
+        const { protocol, hostname } = window.location;
+        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL 
+          || (hostname === 'localhost' || hostname === '127.0.0.1' ? `${protocol}//${hostname}:3001` : `${protocol}//${window.location.host}`);
+        
+        // Busca o token JWT da sessão ativa para autenticação SSE
+        try {
+          const { createClient } = await import('@supabase/supabase-js');
+          const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+          );
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token || '';
+          setConnectionUrl(`${apiBaseUrl}/mcp/${serverId}?token=${token}`);
+        } catch {
+          setConnectionUrl(`${apiBaseUrl}/mcp/${serverId}`);
+        }
+      }
     }
+    buildConnectionUrl();
   }, [serverId]);
 
   // Reseta ao fechar

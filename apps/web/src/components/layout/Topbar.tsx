@@ -2,8 +2,9 @@
 
 import React from 'react';
 import { usePathname } from 'next/navigation';
-import { PanelLeft, Search, HelpCircle, Sun, Moon } from 'lucide-react';
+import { PanelLeft, Search, HelpCircle, Sun, Moon, LogOut } from 'lucide-react';
 import { useTheme } from './ThemeContext';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 
 interface TopbarProps {
   onToggleSidebar: () => void;
@@ -12,6 +13,7 @@ interface TopbarProps {
 
 export function Topbar({ onToggleSidebar, isSidebarOpen }: TopbarProps) {
   const { theme, toggleTheme } = useTheme();
+  const { logout, isLoading: isLoggingOut } = useAuth();
   const pathname = usePathname();
 
   // Inferir breadcrumb da rota atual
@@ -55,6 +57,15 @@ export function Topbar({ onToggleSidebar, isSidebarOpen }: TopbarProps) {
           title="Alternar Tema"
         >
           {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+        </button>
+
+        <button
+          onClick={logout}
+          disabled={isLoggingOut}
+          className="p-1.5 rounded-lg text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors focus:outline-none disabled:opacity-50"
+          title="Sair"
+        >
+          <LogOut className="w-4 h-4" />
         </button>
       </div>
     </header>

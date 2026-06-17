@@ -9,6 +9,7 @@ import { registerEndpointTools } from './mcpTools/endpointTools.js';
 import { registerExecutionTools } from './mcpTools/executionTools.js';
 import { registerAuthTools } from './mcpTools/authTools.js';
 import { registerTestTools } from './mcpTools/testTools.js';
+import { registerProjectTools } from './mcpTools/projectTools.js';
 
 // Exportações das funções utilitárias do motor de testes e geradores (para compatibilidade e uso externo)
 export {
@@ -69,6 +70,7 @@ export async function createMcpServerInstance(targetServerId?: string): Promise<
   registerExecutionTools(mcp, serverRecord);
   registerAuthTools(mcp, serverRecord);
   registerTestTools(mcp, serverRecord);
+  registerProjectTools(mcp, serverRecord);
 
   return { mcpServer: mcp, serverRecord };
 }

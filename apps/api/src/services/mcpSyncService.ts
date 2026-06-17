@@ -1,5 +1,52 @@
 import fetch from 'node-fetch';
+import https from 'https';
 import { getServerById, getToolsByServerId, saveSyncReport, insertToolsBatch, updateToolSchema } from '../repositories/mcpRepository.js';
+
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
+
+function extractSwaggerUrl(html: string, originalUrl: string): string | null {
+  const urlRegex = /url\s*:\s*["']([^"']+)["']/i;
+  const match = html.match(urlRegex);
+  if (match && match[1]) {
+    try {
+      return new URL(match[1], originalUrl).toString();
+    } catch {
+      // ignore
+    }
+  }
+
+  const urlsRegex = /urls\s*:\s*\[\s*\{\s*url\s*:\s*["']([^"']+)["']/i;
+  const matchUrls = html.match(urlsRegex);
+  if (matchUrls && matchUrls[1]) {
+    try {
+      return new URL(matchUrls[1], originalUrl).toString();
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+async function fetchBypassingTLS(targetUrl: string, headers: Record<string, string> = {}): Promise<{ status: number; ok: boolean; text: string; contentType?: string }> {
+  const options: any = {
+    method: 'GET',
+    headers: headers,
+  };
+  if (targetUrl.startsWith('https:')) {
+    options.agent = agent;
+  }
+  const response = await fetch(targetUrl, options);
+  const text = await response.text();
+  return {
+    status: response.status,
+    ok: response.ok,
+    text,
+    contentType: response.headers.get('content-type') || undefined,
+  };
+}
 
 function resolveRefs(schema: any, root: any, visited = new Set<string>()): any {
   if (!schema || typeof schema !== 'object') return schema;
@@ -42,15 +89,70 @@ export async function runServerSyncService(serverId: string): Promise<string> {
   }
 
   // 1. Busca o Swagger
-  const res = await fetch(server.swagger_url, {
-    headers: { 'Accept': 'application/json' }
-  });
-
-  if (!res.ok) {
-    throw new Error(`Falha ao buscar Swagger em ${server.swagger_url} (Status: ${res.status})`);
+  let targetUrl = server.swagger_url;
+  let fetchRes;
+  try {
+    fetchRes = await fetchBypassingTLS(targetUrl, { 'Accept': 'application/json, text/html, */*' });
+  } catch (fetchErr: any) {
+    console.error('Erro ao conectar com a URL na sincronizacao backend:', fetchErr);
+    throw new Error(`Nao foi possivel conectar com a URL informada: ${fetchErr.message}`);
   }
 
-  const data: any = await res.json();
+  if (!fetchRes.ok) {
+    throw new Error(`Falha ao buscar Swagger em ${targetUrl} (Status: ${fetchRes.status})`);
+  }
+
+  let isHtml = false;
+  if (fetchRes.contentType && fetchRes.contentType.includes('text/html')) {
+    isHtml = true;
+  } else if (fetchRes.text.trim().startsWith('<')) {
+    isHtml = true;
+  }
+
+  if (isHtml) {
+    const specUrl = extractSwaggerUrl(fetchRes.text, targetUrl);
+    if (specUrl) {
+      targetUrl = specUrl;
+      try {
+        const fetchResSpec = await fetchBypassingTLS(targetUrl, { 'Accept': 'application/json' });
+        if (fetchResSpec.ok) {
+          fetchRes = fetchResSpec;
+        } else {
+          throw new Error(`Identificamos a documentacao em ${specUrl}, mas houve erro ao acessa-la (Status: ${fetchResSpec.status}).`);
+        }
+      } catch (specErr: any) {
+        throw new Error(`Identificamos a documentacao em ${specUrl}, mas nao conseguimos conectar: ${specErr.message}`);
+      }
+    } else {
+      const commonPaths = ['/v3/api-docs', '/v2/api-docs', '/swagger.json', '/swagger/v1/swagger.json', '/openapi.json'];
+      let success = false;
+      for (const p of commonPaths) {
+        try {
+          const probeUrl = new URL(p, targetUrl).toString();
+          const probeRes = await fetchBypassingTLS(probeUrl, { 'Accept': 'application/json' });
+          if (probeRes.ok && !probeRes.text.trim().startsWith('<')) {
+            fetchRes = probeRes;
+            targetUrl = probeUrl;
+            success = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!success) {
+        throw new Error('A URL informada aponta para uma pagina HTML e nao conseguimos encontrar o link do JSON do Swagger automaticamente. Por favor, forneça o link direto para o JSON/YAML do Swagger.');
+      }
+    }
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(fetchRes.text);
+  } catch (parseErr) {
+    throw new Error('O JSON retornado nao e um JSON valido.');
+  }
+
   if (!data.openapi && !data.swagger) {
     throw new Error('O JSON retornado nao parece ser um OpenAPI ou Swagger valido.');
   }

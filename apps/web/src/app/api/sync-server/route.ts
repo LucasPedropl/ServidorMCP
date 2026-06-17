@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { decrypt } from '@/lib/encryption';
+import { fetchBypassingTLS, extractSwaggerUrl } from '@/lib/fetchServerUtils';
 
 export async function POST(request: Request) {
   try {
@@ -25,19 +27,99 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Servidor não possui URL de Swagger configurada.' }, { status: 400 });
     }
 
-    // 2. Busca o Swagger
-    const res = await fetch(server.swagger_url, {
-      headers: { 'Accept': 'application/json' },
-      cache: 'no-store'
-    });
-
-    if (!res.ok) {
-      return NextResponse.json({ error: `Falha ao buscar Swagger: Destino respondeu com status ${res.status}` }, { status: res.status });
+    // Monta headers para fetch do Swagger (com suporte a Supabase)
+    const fetchHeaders: Record<string, string> = { 'Accept': 'application/json' };
+    
+    if (server.type === 'supabase' && server.encrypted_secrets) {
+      try {
+        const decrypted = decrypt(server.encrypted_secrets);
+        const secrets = JSON.parse(decrypted);
+        fetchHeaders['apikey'] = secrets.service_role_key || '';
+      } catch (e) {
+        console.error('Erro ao descriptografar segredos para sincronização:', e);
+        return NextResponse.json({ error: 'Falha ao descriptografar credenciais do servidor.' }, { status: 500 });
+      }
     }
 
-    const data = await res.json();
+    // 2. Busca o Swagger
+    let targetUrl = server.swagger_url;
+    let fetchRes;
+    try {
+      fetchRes = await fetchBypassingTLS(targetUrl, { headers: fetchHeaders });
+    } catch (fetchErr: any) {
+      console.error('Erro ao conectar com a URL na sincronizacao:', fetchErr);
+      return NextResponse.json(
+        { error: `Nao foi possivel conectar com a URL informada: ${fetchErr.message}` },
+        { status: 500 }
+      );
+    }
+
+    if (!fetchRes.ok) {
+      return NextResponse.json(
+        { error: `Falha ao buscar Swagger: Destino respondeu com status ${fetchRes.status}` },
+        { status: fetchRes.status }
+      );
+    }
+
+    let isHtml = false;
+    if (fetchRes.contentType && fetchRes.contentType.includes('text/html')) {
+      isHtml = true;
+    } else if (fetchRes.text.trim().startsWith('<')) {
+      isHtml = true;
+    }
+
+    if (isHtml) {
+      const specUrl = extractSwaggerUrl(fetchRes.text, targetUrl);
+      if (specUrl) {
+        targetUrl = specUrl;
+        try {
+          const fetchResSpec = await fetchBypassingTLS(targetUrl, { headers: fetchHeaders });
+          if (fetchResSpec.ok) {
+            fetchRes = fetchResSpec;
+          } else {
+            return NextResponse.json({
+              error: `Identificamos a documentacao em ${specUrl}, mas houve erro ao acessa-la (status: ${fetchResSpec.status}).`
+            }, { status: 400 });
+          }
+        } catch (specErr: any) {
+          return NextResponse.json({
+            error: `Identificamos a documentacao em ${specUrl}, mas nao conseguimos conectar: ${specErr.message}`
+          }, { status: 500 });
+        }
+      } else {
+        const commonPaths = ['/v3/api-docs', '/v2/api-docs', '/swagger.json', '/swagger/v1/swagger.json', '/openapi.json'];
+        let success = false;
+        for (const p of commonPaths) {
+          try {
+            const probeUrl = new URL(p, targetUrl).toString();
+            const probeRes = await fetchBypassingTLS(probeUrl, { headers: fetchHeaders });
+            if (probeRes.ok && !probeRes.text.trim().startsWith('<')) {
+              fetchRes = probeRes;
+              targetUrl = probeUrl;
+              success = true;
+              break;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!success) {
+          return NextResponse.json({
+            error: 'A URL informada aponta para uma pagina HTML e nao conseguimos encontrar o link do JSON do Swagger automaticamente. Por favor, forneça o link direto para o JSON/YAML do Swagger.'
+          }, { status: 400 });
+        }
+      }
+    }
+
+    let data;
+    try {
+      data = JSON.parse(fetchRes.text);
+    } catch (parseErr) {
+      return NextResponse.json({ error: 'O JSON retornado nao e um JSON valido.' }, { status: 400 });
+    }
+
     if (!data.openapi && !data.swagger) {
-      return NextResponse.json({ error: 'O JSON retornado não parece ser um OpenAPI ou Swagger válido.' }, { status: 400 });
+      return NextResponse.json({ error: 'O JSON retornado nao parece ser um OpenAPI ou Swagger valido.' }, { status: 400 });
     }
 
     const freshTools: any[] = [];

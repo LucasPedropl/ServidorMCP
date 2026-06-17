@@ -13,7 +13,7 @@
             color: #f8fafc; /* Tailwind slate-50 */
         }
         
-        /* Custom scrollbar for a better look */
+        /* Custom scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
         }
@@ -33,149 +33,115 @@
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
+
+        .loader {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            border-top: 3px solid #ef4444;
+            width: 40px;
+            height: 40px;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
-<body class="min-h-screen flex flex-col items-center py-10 px-4 sm:px-6 lg:px-8 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-800 to-slate-950">
+<body class="min-h-screen flex flex-col items-center justify-center p-4 sm:p-8">
 
-    <div class="w-full max-w-4xl mx-auto space-y-8">
-        
-        <!-- Input Section -->
-        <div class="glass-panel p-4 md:p-6 rounded-2xl shadow-2xl">
-            <form id="urlForm" class="flex flex-col sm:flex-row gap-3">
-                <div class="relative flex-grow">
-                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                        <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
-                        </svg>
-                    </div>
-                    <input 
-                        type="url" 
-                        id="youtubeUrl" 
-                        class="block w-full pl-11 pr-4 py-3 bg-slate-800/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all" 
-                        placeholder="Ex: https://www.youtube.com/watch?v=... ou /live/..."
-                        required
-                    >
-                </div>
-                <button 
-                    type="submit" 
-                    class="flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-xl text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-red-500 transition-colors shadow-lg shadow-red-600/20"
-                >
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    Carregar Vídeo
+    <div class="w-full max-w-4xl flex flex-col gap-6">
+        <!-- Header & Input -->
+        <div class="glass-panel p-6 rounded-2xl shadow-xl flex flex-col gap-4">
+            <div class="text-center sm:text-left">
+                <h1 class="text-2xl sm:text-3xl font-bold text-white flex items-center justify-center sm:justify-start gap-3">
+                    <svg class="w-8 h-8 text-red-500" fill="currentColor" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                    Reprodutor YouTube
+                </h1>
+                <p class="text-slate-400 mt-1 text-sm">Cole o link do vídeo abaixo para assistir sem distrações (resolve o Erro 153).</p>
+            </div>
+
+            <form id="url-form" class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="url-input" placeholder="Ex: https://www.youtube.com/watch?v=..." class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500 transition-colors text-white placeholder-slate-500">
+                <button type="submit" class="bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl px-6 py-3 transition-colors flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Assistir
                 </button>
             </form>
 
-            <!-- Error Message Container (Hidden by default) -->
-            <div id="errorMessage" class="hidden mt-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg flex items-start gap-3">
-                <svg class="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                <p class="text-sm text-red-200" id="errorText">Link inválido. Por favor, insira um URL válido do YouTube.</p>
-            </div>
+            <div id="error-message" class="hidden text-red-400 text-sm bg-red-950/30 p-3 rounded-lg border border-red-900"></div>
         </div>
 
-        <!-- Video Player Section -->
-        <div class="glass-panel p-2 md:p-4 rounded-2xl shadow-2xl relative overflow-hidden group">
-            
-            <!-- Placeholder before video is loaded -->
-            <div id="videoPlaceholder" class="aspect-video w-full bg-slate-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-600/50">
-                <svg class="w-16 h-16 text-slate-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                <p class="text-slate-400 font-medium text-center px-4">O vídeo aparecerá aqui.<br><span class="text-sm font-normal opacity-75">Suporta vídeos normais e transmissões ao vivo.</span></p>
+        <!-- Video Player Area -->
+        <div id="video-container" class="glass-panel w-full aspect-video rounded-2xl shadow-2xl overflow-hidden relative flex items-center justify-center bg-black/50">
+            <!-- Placeholder -->
+            <div id="empty-state" class="flex flex-col items-center justify-center text-slate-500">
+                <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                <p>O vídeo aparecerá aqui</p>
             </div>
 
-            <!-- Actual Iframe Container -->
-            <div id="iframeContainer" class="hidden aspect-video w-full rounded-xl overflow-hidden bg-black relative">
-                <!-- Loader inside iframe container (shows briefly before iframe renders) -->
-                <div id="loadingSpinner" class="absolute inset-0 flex items-center justify-center z-0 bg-slate-900">
-                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500"></div>
-                </div>
-                <!-- Iframe injected via JS -->
-                <iframe 
-                    id="youtubePlayer"
-                    class="absolute inset-0 w-full h-full z-10"
-                    src="" 
-                    title="YouTube video player" 
-                    frameborder="0" 
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-                    allowfullscreen>
-                </iframe>
+            <!-- Loader -->
+            <div id="loading-spinner" class="hidden absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
+                <div class="loader"></div>
             </div>
-            
-            <!-- Status Badge (Live/VOD indicator idea, though youtube handles UI mostly) -->
-            <div id="statusBadge" class="hidden absolute top-6 left-6 z-20 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                <span class="text-xs font-semibold text-white tracking-wider uppercase">Conectado</span>
-            </div>
+
+            <!-- Iframe Container -->
+            <div id="player-wrapper" class="w-full h-full absolute inset-0"></div>
         </div>
-
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const form = document.getElementById('urlForm');
-            const inputField = document.getElementById('youtubeUrl');
-            const errorMessage = document.getElementById('errorMessage');
-            const errorText = document.getElementById('errorText');
-            
-            const videoPlaceholder = document.getElementById('videoPlaceholder');
-            const iframeContainer = document.getElementById('iframeContainer');
-            const youtubePlayer = document.getElementById('youtubePlayer');
-            const statusBadge = document.getElementById('statusBadge');
-            const loadingSpinner = document.getElementById('loadingSpinner');
+            const form = document.getElementById('url-form');
+            const inputField = document.getElementById('url-input');
+            const errorMessage = document.getElementById('error-message');
+            const emptyState = document.getElementById('empty-state');
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const playerWrapper = document.getElementById('player-wrapper');
 
-            /**
-             * Extract YouTube Video ID from various URL formats.
-             * Supports:
-             * - youtube.com/watch?v=ID
-             * - youtu.be/ID
-             * - youtube.com/embed/ID
-             * - youtube.com/v/ID
-             * - youtube.com/live/ID (Live streams)
-             * - youtube.com/shorts/ID
-             */
-            function extractYouTubeID(url) {
-                // Regex to capture the 11 character ID
-                const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|live|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
-                const match = url.match(regExp);
-                return (match && match[1]) ? match[1] : null;
-            }
-
-            function showError(message) {
-                errorText.textContent = message;
+            function showError(msg) {
+                errorMessage.textContent = msg;
                 errorMessage.classList.remove('hidden');
-                
-                // Hide video and show placeholder on error
-                iframeContainer.classList.add('hidden');
-                videoPlaceholder.classList.remove('hidden');
-                statusBadge.classList.add('hidden');
-                youtubePlayer.src = "";
             }
 
             function hideError() {
                 errorMessage.classList.add('hidden');
             }
 
+            function extractYouTubeID(url) {
+                // Regex super robusta para pegar IDs de links normais, youtu.be e shorts
+                const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
+                const match = url.match(regExp);
+                return (match && match[2].length === 11) ? match[2] : null;
+            }
+
             function loadVideo(videoId) {
-                // Construct the embed URL. 
-                // Autoplay is set to 1. Note: Browsers may block autoplay if not muted, 
-                // but YouTube's player handles this gracefully usually.
-                const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
-                
-                // Show iframe container, hide placeholder
-                videoPlaceholder.classList.add('hidden');
-                iframeContainer.classList.remove('hidden');
-                statusBadge.classList.remove('hidden');
-                
-                // Reset loading state
-                loadingSpinner.style.display = 'flex';
-                youtubePlayer.style.opacity = '0';
+                emptyState.style.display = 'none';
+                playerWrapper.innerHTML = ''; // Limpa o iframe anterior
+                loadingSpinner.classList.remove('hidden');
 
-                // Set iframe source
-                youtubePlayer.src = embedUrl;
+                const iframe = document.createElement('iframe');
+                iframe.id = 'youtube-player';
+                iframe.className = 'w-full h-full';
+                iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&showinfo=0&modestbranding=1`;
+                iframe.title = 'YouTube video player';
+                iframe.frameBorder = '0';
+                iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+                iframe.allowFullscreen = true;
+                
+                // === A MÁGICA QUE RESOLVE O ERRO 153 DE RODAR LOCAL ===
+                iframe.referrerPolicy = "strict-origin-when-cross-origin";
+                
+                iframe.style.opacity = '0';
 
-                // Once iframe loads, hide spinner
-                youtubePlayer.onload = () => {
-                    loadingSpinner.style.display = 'none';
-                    youtubePlayer.style.opacity = '1';
-                    youtubePlayer.style.transition = 'opacity 0.5s ease';
+                playerWrapper.appendChild(iframe);
+
+                iframe.onload = () => {
+                    loadingSpinner.classList.add('hidden');
+                    iframe.style.opacity = '1';
+                    iframe.style.transition = 'opacity 0.5s ease';
                 };
             }
 
@@ -195,13 +161,12 @@
                 if (videoId) {
                     loadVideo(videoId);
                 } else {
-                    showError("Não foi possível encontrar um ID de vídeo válido neste link. Verifique se é um link do YouTube (Vídeo normal, Shorts ou Live).");
+                    showError("Não foi possível encontrar um ID de vídeo válido neste link. Verifique se é um link do YouTube.");
                 }
             });
 
-            // Optional: Auto-load if pasted link is valid without hitting Enter
+            // Toca o vídeo automaticamente assim que o link é colado no input
             inputField.addEventListener('paste', (e) => {
-                // Add a tiny delay to let the pasted text actually populate the input field
                 setTimeout(() => {
                     const pastedUrl = inputField.value.trim();
                     const videoId = extractYouTubeID(pastedUrl);

@@ -4,7 +4,7 @@ import React from 'react';
 import { McpServerEntity } from '../schemas/serverSchema';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Server, Trash2, ExternalLink, ShieldCheck, Key } from 'lucide-react';
+import { Server, Trash2, ExternalLink, ShieldCheck, Key, Database } from 'lucide-react';
 
 interface ServerCardProps {
   server: McpServerEntity;
@@ -24,8 +24,8 @@ export function ServerCard({ server, onDelete, onSelect }: ServerCardProps) {
       <div>
         <CardHeader className="flex flex-row items-center justify-between gap-4 mb-2 transition-colors">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-white group-hover:bg-zinc-900 dark:group-hover:bg-white group-hover:text-white dark:group-hover:text-black transition-colors">
-              <Server className="w-5 h-5" />
+            <div className={`p-2.5 rounded-xl border transition-colors ${server.type === 'supabase' ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-600 group-hover:text-white dark:group-hover:bg-emerald-500 dark:group-hover:text-black' : 'bg-zinc-100 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-white group-hover:bg-zinc-900 dark:group-hover:bg-white group-hover:text-white dark:group-hover:text-black'}`}>
+              {server.type === 'supabase' ? <Database className="w-5 h-5" /> : <Server className="w-5 h-5" />}
             </div>
             <div>
               <CardTitle className="text-base text-zinc-900 dark:text-white transition-colors">

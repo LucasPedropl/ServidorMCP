@@ -4,6 +4,8 @@ import "./globals.css";
 import { ToastProvider } from "@/components/ui/Toast";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ThemeProvider } from "@/components/layout/ThemeContext";
+import { AuthProvider } from "@/features/auth/components/AuthContext";
+import { ProtectedRoute } from "@/features/auth/components/ProtectedRoute";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,11 +37,15 @@ export default function RootLayout({
         className="h-full bg-white dark:bg-black text-zinc-900 dark:text-white selection:bg-zinc-200 dark:selection:bg-zinc-800 transition-colors"
         suppressHydrationWarning
       >
-        <ThemeProvider>
-          <ToastProvider>
-            <AppLayout>{children}</AppLayout>
-          </ToastProvider>
-        </ThemeProvider>
+        <AuthProvider>
+          <ProtectedRoute>
+            <ThemeProvider>
+              <ToastProvider>
+                <AppLayout>{children}</AppLayout>
+              </ToastProvider>
+            </ThemeProvider>
+          </ProtectedRoute>
+        </AuthProvider>
       </body>
     </html>
   );

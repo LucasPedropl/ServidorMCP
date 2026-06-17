@@ -3,6 +3,37 @@ import cors from 'cors';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { startMcpEngine, createMcpServerInstance, runTestCaseEngine, executeServerTeardown } from './services/mcpEngineService.js';
 import fs from 'fs';
+import { supabaseAdmin } from './config/supabase.js';
+
+/**
+ * Valida se o token JWT fornecido pertence ao usuário proprietário do servidor MCP.
+ */
+async function validateServerAccess(serverId: string, token: string): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) {
+      console.error(`[Security Alert] Falha ao decodificar token JWT: ${error?.message}`);
+      return false;
+    }
+    
+    const { data, error: dbError } = await supabaseAdmin
+      .from('mcp_servers')
+      .select('user_id')
+      .eq('id', serverId)
+      .single();
+      
+    if (dbError || !data) {
+      console.error(`[Security Alert] Servidor MCP ${serverId} nao encontrado.`);
+      return false;
+    }
+    
+    return data.user_id === user.id;
+  } catch (err: any) {
+    console.error(`[Security Alert] Erro na validacao de acesso ao servidor:`, err.message);
+    return false;
+  }
+}
 
 // Mapa para manter os transportes SSE ativos por ID de sessão
 const activeTransports: Record<string, SSEServerTransport> = {};
@@ -20,7 +51,17 @@ async function startSseServer() {
   // Rota SSE para estabelecer o canal de comunicação do MCP
   app.get('/mcp/:serverId', async (req, res) => {
     const { serverId } = req.params;
-    console.error(`[MCP SSE] Recebida conexão GET para o servidor: ${serverId}`);
+    const token = req.query.token as string;
+    
+    console.error(`[MCP SSE] Recebida conexao GET para o servidor: ${serverId}`);
+
+    // Validação de segurança obrigatória via token JWT
+    const hasAccess = await validateServerAccess(serverId, token);
+    if (!hasAccess) {
+      console.error(`[Security Violation] Acesso negado para o servidor ${serverId}. Token ausente ou invalido.`);
+      res.status(403).json({ error: 'Acesso Proibido. Token JWT ausente ou invalido para este servidor.' });
+      return;
+    }
 
     try {
       // Cria a instância do servidor MCP dinamicamente para o ID solicitado

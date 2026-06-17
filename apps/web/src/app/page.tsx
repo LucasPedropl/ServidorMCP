@@ -4,8 +4,7 @@ import React, { useState } from 'react';
 import { useSwaggerIngestion } from '@/features/swagger/hooks/useSwaggerIngestion';
 import { useServers, useCreateServer } from '@/features/servers/hooks/useServers';
 import { useSaveToolsBatch } from '@/features/tools/hooks/useTools';
-import { SwaggerInputForm } from '@/features/swagger/components/SwaggerInputForm';
-import { SwaggerIngestionModal } from '@/features/swagger/components/SwaggerIngestionModal';
+import { CreateServerModal } from '@/features/servers/components/CreateServerModal';
 import { ServersList } from '@/features/servers/components/ServersList';
 import { ToolsReviewSection } from '@/features/tools/components/ToolsReviewSection';
 import { CreateMcpServerInput } from '@/features/servers/schemas/serverSchema';
@@ -22,9 +21,27 @@ export default function HomePage() {
   const { createServer, isCreating: isCreatingServer } = useCreateServer();
   const { saveBatch: saveToolsBatch, isSaving: isToolsSaving } = useSaveToolsBatch();
 
-  const onSubmitUrl = async (url: string) => {
+  /** Handler: Submissão de URL REST/Swagger */
+  const onSubmitRest = async (url: string) => {
     await ingestUrl(url);
-    setIsModalOpen(false);
+  };
+
+  /** Handler: Submissão de servidor Supabase */
+  const onSubmitSupabase = async (data: { name: string; supabase_url: string; anon_key: string; service_role_key: string }) => {
+    try {
+      const serverInput: CreateMcpServerInput = {
+        name: data.name,
+        type: 'supabase',
+        supabase_url: data.supabase_url,
+        anon_key: data.anon_key,
+        service_role_key: data.service_role_key,
+      };
+
+      await createServer(serverInput);
+      await refetchServers();
+    } catch (err) {
+      console.error('Falha ao criar servidor Supabase:', err);
+    }
   };
 
   const handleCancelReview = () => {
@@ -81,14 +98,13 @@ export default function HomePage() {
         </div>
       </header>
 
-      <SwaggerIngestionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)}>
-        <div className="space-y-4">
-          <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Cole a URL da documentacao OpenAPI ou Swagger (JSON/YAML)
-          </h4>
-          <SwaggerInputForm onSubmitUrl={onSubmitUrl} isLoading={isIngesting} />
-        </div>
-      </SwaggerIngestionModal>
+      <CreateServerModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmitRest={onSubmitRest}
+        onSubmitSupabase={onSubmitSupabase}
+        isLoading={isIngesting || isCreatingServer}
+      />
 
       {parsedSwagger && (
         <section className="animate-in fade-in duration-300">

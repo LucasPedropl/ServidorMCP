@@ -15,17 +15,29 @@ export async function fetchServersService(): Promise<McpServerEntity[]> {
 }
 
 export async function createServerService(input: CreateMcpServerInput): Promise<McpServerEntity> {
-  const { data, error } = await supabase
-    .from('mcp_servers')
-    .insert([input])
-    .select()
-    .single();
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
 
-  if (error) {
-    throw new Error(error.message || 'Falha ao criar servidor MCP.');
+  if (!token) {
+    throw new Error('Sessão de usuário não identificada. Faça login novamente.');
   }
 
-  return data as McpServerEntity;
+  const res = await fetch('/api/servers', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || 'Falha ao criar servidor MCP.');
+  }
+
+  const result = await res.json();
+  return result.server as McpServerEntity;
 }
 
 export async function updateServerAuthService(

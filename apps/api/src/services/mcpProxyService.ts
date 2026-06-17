@@ -1,6 +1,11 @@
 import fetch from 'node-fetch';
+import https from 'https';
 import { updateServerCredentials, getToolsByServerId } from '../repositories/mcpRepository.js';
 import type { ServerRecord, ToolRecord } from '../repositories/mcpRepository.js';
+
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
 
 // Importa e Re-exporta para compatibilidade com outras partes do sistema
 import { proxyLogs, pushProxyLog } from './mcpProxy/proxyLogger.js';
@@ -62,28 +67,48 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
     }
 
     const creds = server.auth_credentials;
-    const isAutoLogin = creds && creds.authMode === 'auto_login';
+    const isAutoLogin = creds && (creds.authMode === 'auto_login' || server.type === 'supabase');
     const authReqRaw = tool.parameters_schema?.authRequirement || 'none';
     const authRes = resolveActiveAuth(server, authReqRaw, isAutoLogin, isRetry);
     let { currentToken, allowedProfiles } = authRes;
     activeProfileId = authRes.activeProfileId;
 
-    if (allowedProfiles.length > 0) {
-      if (isAutoLogin && !currentToken && !isRetry) {
-        console.error(`[MCP Proxy] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
-        const loginRes = await performAutoLogin(server, activeProfileId);
-        currentToken = loginRes.token;
-        activeProfileId = loginRes.profileId;
-      }
+    if (server.type === 'supabase') {
+      headers['apikey'] = creds?.anon_key || '';
+      if (allowedProfiles.length > 0) {
+        if (!currentToken && !isRetry) {
+          console.error(`[MCP Proxy Supabase] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
+          const loginRes = await performAutoLogin(server, activeProfileId);
+          currentToken = loginRes.token;
+          activeProfileId = loginRes.profileId;
+        }
 
-      if (currentToken) {
-        headers['Authorization'] = `Bearer ${currentToken}`;
-      } else if (server.auth_type === 'dashboard_login' && creds?.token) {
-        headers['Authorization'] = `Bearer ${creds.token}`;
+        if (currentToken) {
+          headers['Authorization'] = `Bearer ${currentToken}`;
+        } else {
+          headers['Authorization'] = `Bearer ${creds?.anon_key}`;
+        }
+      } else {
+        headers['Authorization'] = `Bearer ${creds?.anon_key}`;
       }
     } else {
-      console.error(`[MCP Proxy] Endpoint ${tool.endpoint_path} configurado como Público (Sem Auth). Omitindo header Authorization.`);
-      delete headers['Authorization'];
+      if (allowedProfiles.length > 0) {
+        if (isAutoLogin && !currentToken && !isRetry) {
+          console.error(`[MCP Proxy] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
+          const loginRes = await performAutoLogin(server, activeProfileId);
+          currentToken = loginRes.token;
+          activeProfileId = loginRes.profileId;
+        }
+
+        if (currentToken) {
+          headers['Authorization'] = `Bearer ${currentToken}`;
+        } else if (server.auth_type === 'dashboard_login' && creds?.token) {
+          headers['Authorization'] = `Bearer ${creds.token}`;
+        }
+      } else {
+        console.error(`[MCP Proxy] Endpoint ${tool.endpoint_path} configurado como Público (Sem Auth). Omitindo header Authorization.`);
+        delete headers['Authorization'];
+      }
     }
 
     const queryParams = new URLSearchParams();
@@ -142,6 +167,7 @@ export async function executeMcpToolProxy(server: ServerRecord, tool: ToolRecord
       method,
       headers,
       body: fetchBody,
+      agent: url.startsWith('https:') ? agent : undefined
     });
 
     if (response.status === 401 && isAutoLogin && allowedProfiles.length > 0 && !isRetry) {
@@ -199,7 +225,7 @@ export async function executeGenericMcpProxy(
     }
 
     const creds = server.auth_credentials;
-    const isAutoLogin = creds && creds.authMode === 'auto_login';
+    const isAutoLogin = creds && (creds.authMode === 'auto_login' || server.type === 'supabase');
 
     const tools = await getToolsByServerId(server.id);
     const matchedTool = tools.find(t => t.http_method.toUpperCase() === method.toUpperCase() && t.endpoint_path === endpoint);
@@ -219,22 +245,42 @@ export async function executeGenericMcpProxy(
     let { currentToken, allowedProfiles } = authRes;
     activeProfileId = authRes.activeProfileId;
 
-    if (allowedProfiles.length > 0) {
-      if (isAutoLogin && !currentToken && !isRetry) {
-        console.error(`[MCP Proxy Genérico] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
-        const loginRes = await performAutoLogin(server, activeProfileId);
-        currentToken = loginRes.token;
-        activeProfileId = loginRes.profileId;
-      }
+    if (server.type === 'supabase') {
+      headers['apikey'] = creds?.anon_key || '';
+      if (allowedProfiles.length > 0) {
+        if (!currentToken && !isRetry) {
+          console.error(`[MCP Proxy Genérico Supabase] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
+          const loginRes = await performAutoLogin(server, activeProfileId);
+          currentToken = loginRes.token;
+          activeProfileId = loginRes.profileId;
+        }
 
-      if (currentToken) {
-        headers['Authorization'] = `Bearer ${currentToken}`;
-      } else if (server.auth_type === 'dashboard_login' && creds?.token) {
-        headers['Authorization'] = `Bearer ${creds.token}`;
+        if (currentToken) {
+          headers['Authorization'] = `Bearer ${currentToken}`;
+        } else {
+          headers['Authorization'] = `Bearer ${creds?.anon_key}`;
+        }
+      } else {
+        headers['Authorization'] = `Bearer ${creds?.anon_key}`;
       }
     } else {
-      console.error(`[MCP Proxy Genérico] Endpoint ${endpoint} configurado como Público (Sem Auth). Omitindo header Authorization.`);
-      delete headers['Authorization'];
+      if (allowedProfiles.length > 0) {
+        if (isAutoLogin && !currentToken && !isRetry) {
+          console.error(`[MCP Proxy Genérico] Nenhum token em cache para ${server.name} (Perfis: ${allowedProfiles.join(', ')}). Realizando login inicial para ${activeProfileId}...`);
+          const loginRes = await performAutoLogin(server, activeProfileId);
+          currentToken = loginRes.token;
+          activeProfileId = loginRes.profileId;
+        }
+
+        if (currentToken) {
+          headers['Authorization'] = `Bearer ${currentToken}`;
+        } else if (server.auth_type === 'dashboard_login' && creds?.token) {
+          headers['Authorization'] = `Bearer ${creds.token}`;
+        }
+      } else {
+        console.error(`[MCP Proxy Genérico] Endpoint ${endpoint} configurado como Público (Sem Auth). Omitindo header Authorization.`);
+        delete headers['Authorization'];
+      }
     }
 
     if (queryParams && Object.keys(queryParams).length > 0) {
@@ -279,6 +325,7 @@ export async function executeGenericMcpProxy(
       method: method.toUpperCase(),
       headers,
       body: fetchBody,
+      agent: url.startsWith('https:') ? agent : undefined
     });
 
     if (response.status === 401 && isAutoLogin && allowedProfiles.length > 0 && !isRetry) {
@@ -309,6 +356,7 @@ export async function executeGenericMcpProxy(
               method: method.toUpperCase(),
               headers: fallbackHeaders,
               body: fetchBody,
+              agent: url.startsWith('https:') ? agent : undefined
             });
 
             if (fallbackResponse.ok) {

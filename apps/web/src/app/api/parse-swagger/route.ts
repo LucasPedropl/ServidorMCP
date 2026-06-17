@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { fetchBypassingTLS, extractSwaggerUrl } from '@/lib/fetchServerUtils';
 
 function resolveRefs(schema: any, root: any, visited = new Set<string>()): any {
   if (!schema || typeof schema !== 'object') return schema;
@@ -43,20 +44,82 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'URL invalida fornecida.' }, { status: 400 });
     }
 
-    // Busca o Swagger na URL de destino (Server-side contorna CORS)
-    const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
-      cache: 'no-store'
-    });
+    let targetUrl = url;
+    let fetchRes;
 
-    if (!response.ok) {
+    try {
+      fetchRes = await fetchBypassingTLS(targetUrl, { 'Accept': 'application/json, text/html, */*' });
+    } catch (fetchErr: any) {
+      console.error('Erro ao conectar com a URL:', fetchErr);
       return NextResponse.json(
-        { error: `Falha ao buscar Swagger: Destino respondeu com status ${response.status}` },
-        { status: response.status }
+        { error: `Nao foi possivel conectar com a URL informada: ${fetchErr.message}` },
+        { status: 500 }
       );
     }
 
-    const data = await response.json();
+    if (!fetchRes.ok) {
+      return NextResponse.json(
+        { error: `Falha ao buscar Swagger: Destino respondeu com status ${fetchRes.status}` },
+        { status: fetchRes.status }
+      );
+    }
+
+    let isHtml = false;
+    if (fetchRes.contentType && fetchRes.contentType.includes('text/html')) {
+      isHtml = true;
+    } else if (fetchRes.text.trim().startsWith('<')) {
+      isHtml = true;
+    }
+
+    if (isHtml) {
+      const specUrl = extractSwaggerUrl(fetchRes.text, targetUrl);
+      if (specUrl) {
+        targetUrl = specUrl;
+        try {
+          const fetchResSpec = await fetchBypassingTLS(targetUrl, { 'Accept': 'application/json' });
+          if (fetchResSpec.ok) {
+            fetchRes = fetchResSpec;
+          } else {
+            return NextResponse.json({
+              error: `Identificamos a documentacao em ${specUrl}, mas houve erro ao acessa-la (status: ${fetchResSpec.status}).`
+            }, { status: 400 });
+          }
+        } catch (specErr: any) {
+          return NextResponse.json({
+            error: `Identificamos a documentacao em ${specUrl}, mas nao conseguimos conectar: ${specErr.message}`
+          }, { status: 500 });
+        }
+      } else {
+        const commonPaths = ['/v3/api-docs', '/v2/api-docs', '/swagger.json', '/swagger/v1/swagger.json', '/openapi.json'];
+        let success = false;
+        for (const p of commonPaths) {
+          try {
+            const probeUrl = new URL(p, targetUrl).toString();
+            const probeRes = await fetchBypassingTLS(probeUrl, { 'Accept': 'application/json' });
+            if (probeRes.ok && !probeRes.text.trim().startsWith('<')) {
+              fetchRes = probeRes;
+              targetUrl = probeUrl;
+              success = true;
+              break;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!success) {
+          return NextResponse.json({
+            error: 'A URL informada aponta para uma pagina HTML e nao conseguimos encontrar o link do JSON do Swagger automaticamente. Por favor, forneça o link direto para o JSON/YAML do Swagger.'
+          }, { status: 400 });
+        }
+      }
+    }
+
+    let data;
+    try {
+      data = JSON.parse(fetchRes.text);
+    } catch (parseErr) {
+      return NextResponse.json({ error: 'O JSON retornado nao e um JSON valido.' }, { status: 400 });
+    }
 
     // Validação básica se é OpenAPI/Swagger
     if (!data.openapi && !data.swagger) {
@@ -70,7 +133,7 @@ export async function POST(request: Request) {
     if (resolvedData.servers && resolvedData.servers.length > 0) {
       baseUrl = resolvedData.servers[0].url;
     } else {
-      const urlObj = new URL(url);
+      const urlObj = new URL(targetUrl);
       baseUrl = `${urlObj.protocol}//${urlObj.host}`;
     }
 

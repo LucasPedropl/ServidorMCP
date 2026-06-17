@@ -71,10 +71,9 @@ export function ToolsReviewSection({ parsedData, onCancel, onConfirmSave, isSavi
   const handleFormSubmit = async (data: ToolsBatchFormData) => {
     const serverInput: CreateMcpServerInput = {
       name: serverName,
+      type: 'rest',
       swagger_url: parsedData.swaggerUrl,
       api_base_url: parsedData.baseUrl,
-      auth_type: authType,
-      auth_credentials: {},
     };
 
     const toolsInput = data.tools.map((t) => ({

@@ -1,6 +1,11 @@
 import fetch from 'node-fetch';
+import https from 'https';
 import { updateServerCredentials } from '../../repositories/mcpRepository.js';
 import type { ServerRecord } from '../../repositories/mcpRepository.js';
+
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
 
 export const tokenCache = new Map<string, string>();
 export const tokenAcquiredAtCache = new Map<string, number>();
@@ -94,6 +99,66 @@ export function resolveActiveAuth(
 
 export async function performAutoLogin(server: ServerRecord, profileId?: string): Promise<{ token: string; profileId: string }> {
   const creds = server.auth_credentials;
+  
+  // Tratamento específico de login para servidores Supabase
+  if (server.type === 'supabase') {
+    if (!creds || !creds.anon_key) {
+      throw new Error('Credenciais de chave anônima (anon_key) do Supabase ausentes.');
+    }
+
+    let profile: any = null;
+    if (creds.profiles && Array.isArray(creds.profiles)) {
+      if (profileId && profileId !== 'none') {
+        profile = creds.profiles.find((p: any) => p.id === profileId);
+      }
+      if (!profile && creds.profiles.length > 0) {
+        profile = creds.profiles[0];
+      }
+    }
+
+    if (!profile || !profile.email || !profile.password) {
+      throw new Error(`Perfil de teste do Supabase (e-mail/senha) não configurado para o ID: ${profileId}`);
+    }
+
+    const supabaseUrl = server.api_base_url.replace(/\/rest\/v1\/?$/, '');
+    const loginUrl = `${supabaseUrl}/auth/v1/token?grant_type=password`;
+
+    console.error(`[MCP Proxy AutoLogin Supabase] Efetuando login em ${loginUrl} para ${profile.email}...`);
+
+    const res = await fetch(loginUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': creds.anon_key,
+      },
+      body: JSON.stringify({
+        email: profile.email,
+        password: profile.password
+      }),
+      agent: loginUrl.startsWith('https:') ? agent : undefined
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Falha no login do Supabase (${res.status} ${res.statusText}): ${errText}`);
+    }
+
+    const data = await res.json() as any;
+    const token = data.access_token;
+
+    if (!token || typeof token !== 'string') {
+      throw new Error(`Token access_token não retornado pelo Supabase: ${JSON.stringify(data)}`);
+    }
+
+    console.error(`[MCP Proxy AutoLogin Supabase] Token obtido com sucesso para o servidor ${server.name} (${profile.email})!`);
+    const cacheKey = `${server.id}:${profile.id}`;
+    tokenCache.set(cacheKey, token);
+    tokenCache.set(server.id, token); // fallback legacy
+    tokenAcquiredAtCache.set(cacheKey, Date.now());
+    return { token, profileId: profile.id };
+  }
+
+  // Comportamento original para servidores REST genéricos
   if (!creds || creds.authMode !== 'auto_login') {
     throw new Error('Servidor não está configurado para auto_login.');
   }
@@ -140,6 +205,7 @@ export async function performAutoLogin(server: ServerRecord, profileId?: string)
       'Accept': 'application/json',
     },
     body: bodyPayload ? JSON.stringify(bodyPayload) : null,
+    agent: loginUrl.startsWith('https:') ? agent : undefined
   });
 
   if (!res.ok) {
@@ -147,7 +213,7 @@ export async function performAutoLogin(server: ServerRecord, profileId?: string)
     throw new Error(`Falha no AutoLogin (${res.status} ${res.statusText}): ${errText}`);
   }
 
-  const data = await res.json();
+  const data = await res.json() as any;
 
   const pathParts = (profile.tokenPath || 'token').split('.');
   let token: any = data;

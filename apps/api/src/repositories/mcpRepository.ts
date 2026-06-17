@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase.js';
+import { decrypt } from '../services/encryptionService.js';
 
 export interface ServerRecord {
   id: string;
@@ -7,6 +8,8 @@ export interface ServerRecord {
   api_base_url: string;
   auth_type: string;
   auth_credentials: any;
+  type?: string;
+  encrypted_secrets?: string | null;
 }
 
 export interface CategoryRecord {
@@ -41,7 +44,33 @@ export async function getServerById(serverId: string): Promise<ServerRecord> {
     throw new Error(`Servidor MCP com ID ${serverId} nao encontrado.`);
   }
 
-  return data as ServerRecord;
+  const record = data as ServerRecord;
+  if (record.encrypted_secrets) {
+    try {
+      const decrypted = decrypt(record.encrypted_secrets);
+      const secrets = JSON.parse(decrypted);
+      
+      if (record.type === 'supabase') {
+        record.api_base_url = `${secrets.project_url.replace(/\/$/, '')}/rest/v1`;
+        record.auth_credentials = {
+          ...record.auth_credentials,
+          anon_key: secrets.anon_key,
+          service_role_key: secrets.service_role_key,
+          authMode: record.auth_credentials?.authMode || 'auto_login',
+          profiles: record.auth_credentials?.profiles || []
+        };
+      } else {
+        record.auth_credentials = {
+          ...record.auth_credentials,
+          ...secrets
+        };
+      }
+    } catch (e) {
+      console.error(`[MCP Repo] Erro ao descriptografar segredos do servidor ${serverId}:`, e);
+    }
+  }
+
+  return record;
 }
 
 export async function getCategoriesByServerId(serverId: string): Promise<CategoryRecord[]> {
@@ -80,7 +109,32 @@ export async function getFirstServer(): Promise<ServerRecord | null> {
     .single();
 
   if (error || !data) return null;
-  return data as ServerRecord;
+  
+  const record = data as ServerRecord;
+  if (record.encrypted_secrets) {
+    try {
+      const decrypted = decrypt(record.encrypted_secrets);
+      const secrets = JSON.parse(decrypted);
+      if (record.type === 'supabase') {
+        record.api_base_url = `${secrets.project_url.replace(/\/$/, '')}/rest/v1`;
+        record.auth_credentials = {
+          ...record.auth_credentials,
+          anon_key: secrets.anon_key,
+          service_role_key: secrets.service_role_key,
+          authMode: record.auth_credentials?.authMode || 'auto_login',
+          profiles: record.auth_credentials?.profiles || []
+        };
+      } else {
+        record.auth_credentials = {
+          ...record.auth_credentials,
+          ...secrets
+        };
+      }
+    } catch (e) {
+      console.error(`[MCP Repo] Erro ao descriptografar segredos no getFirstServer:`, e);
+    }
+  }
+  return record;
 }
 
 export async function updateServerCredentials(serverId: string, authType: string, authCredentials: any): Promise<void> {

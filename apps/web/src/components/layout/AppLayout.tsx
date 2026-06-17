@@ -3,13 +3,20 @@
 import React, { useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import { usePathname } from 'next/navigation';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const pathname = usePathname();
 
   const toggleSidebar = () => {
     setIsSidebarOpen((prev) => !prev);
   };
+
+  // Se for a tela de login, renderiza apenas o conteúdo em tela cheia
+  if (pathname === '/login') {
+    return <div className="h-screen w-full">{children}</div>;
+  }
 
   return (
     <div className="flex h-screen w-full bg-zinc-100 dark:bg-[#000000] overflow-hidden text-zinc-900 dark:text-white transition-colors">
